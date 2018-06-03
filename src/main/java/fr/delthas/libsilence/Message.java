@@ -5,7 +5,6 @@ import org.whispersystems.libsignal.state.SessionRecord;
 
 @SuppressWarnings("AbstractClassWithoutAbstractMethods")
 public abstract class Message {
-  
   public enum Type {
     TEXT,
     KEY_INIT,
@@ -23,72 +22,72 @@ public abstract class Message {
   }
   
   public Type getType() {
-    if(this instanceof Text) {
+    if (this instanceof Text) {
       return Type.TEXT;
     }
-    if(this instanceof KeyInit) {
+    if (this instanceof KeyInit) {
       return Type.KEY_INIT;
     }
-    if(this instanceof KeyResponse) {
+    if (this instanceof KeyResponse) {
       return Type.KEY_REPLY;
     }
-    if(this instanceof SessionEnd) {
+    if (this instanceof SessionEnd) {
       return Type.SESSION_END;
     }
     throw new AssertionError("impossible message type " + getClass().getSimpleName());
   }
   
   public Text asText() {
-    if(this instanceof Text) {
-      return (Text)this;
+    if (this instanceof Text) {
+      return (Text) this;
     }
-    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() +", not a Text");
+    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() + ", not a Text");
   }
   
   public KeyInit asKeyInit() {
-    if(this instanceof KeyInit) {
-      return (KeyInit)this;
+    if (this instanceof KeyInit) {
+      return (KeyInit) this;
     }
-    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() +", not a KeyInit");
+    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() + ", not a KeyInit");
   }
   
   public KeyResponse asKeyResponse() {
-    if(this instanceof KeyResponse) {
-      return (KeyResponse)this;
+    if (this instanceof KeyResponse) {
+      return (KeyResponse) this;
     }
-    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() +", not a KeyResponse");
+    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() + ", not a KeyResponse");
   }
   
   public SessionEnd asSessionEnd() {
-    if(this instanceof SessionEnd) {
-      return (SessionEnd)this;
+    if (this instanceof SessionEnd) {
+      return (SessionEnd) this;
     }
-    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() +", not a SessionEnd");
+    throw new IllegalArgumentException("this message is a " + getClass().getSimpleName() + ", not a SessionEnd");
   }
   
   public boolean isText() {
-    if(this instanceof Text) {
+    if (this instanceof Text) {
       return true;
     }
     return false;
   }
   
   public boolean isKeyInit() {
-    if(this instanceof KeyInit) {
+    if (this instanceof KeyInit) {
       return true;
     }
     return false;
   }
   
   public boolean isKeyResponse() {
-    if(this instanceof KeyResponse) {
+    if (this instanceof KeyResponse) {
       return true;
     }
     return false;
   }
   
   public boolean isSessionEnd() {
-    if(this instanceof SessionEnd) {
+    if (this instanceof SessionEnd) {
       return true;
     }
     return false;
@@ -104,12 +103,12 @@ public abstract class Message {
   
   public static final class Text extends Message {
     private String text;
-  
+    
     Text(String address, boolean valid, String text) {
       super(address, valid);
       this.text = text;
     }
-  
+    
     public String getText() {
       return text;
     }
@@ -121,7 +120,7 @@ public abstract class Message {
     private int sequence;
     private SessionRecord sessionRecord;
     private SymmetricSignalProtocolParameters parameters;
-  
+    
     public KeyInit(String address, boolean valid, byte[] fingerprint, int flags, int sequence, SessionRecord sessionRecord, SymmetricSignalProtocolParameters parameters) {
       super(address, valid);
       this.fingerprint = fingerprint;
@@ -130,27 +129,27 @@ public abstract class Message {
       this.sessionRecord = sessionRecord;
       this.parameters = parameters;
     }
-  
+    
     public KeyInit(String address, byte[] fingerprint) {
       this(address, false, fingerprint, 0, 0, null, null);
     }
-  
+    
     public byte[] getFingerprint() {
       return fingerprint;
     }
-  
+    
     SessionRecord getSessionRecord() {
       return sessionRecord;
     }
-  
+    
     SymmetricSignalProtocolParameters getParameters() {
       return parameters;
     }
-  
+    
     int getFlags() {
       return flags;
     }
-  
+    
     int getSequence() {
       return sequence;
     }
@@ -160,26 +159,26 @@ public abstract class Message {
     private byte[] fingerprint;
     private SessionRecord sessionRecord;
     private SymmetricSignalProtocolParameters parameters;
-  
+    
     public KeyResponse(String address, boolean valid, byte[] fingerprint, SessionRecord sessionRecord, SymmetricSignalProtocolParameters parameters) {
       super(address, valid);
       this.fingerprint = fingerprint;
       this.sessionRecord = sessionRecord;
       this.parameters = parameters;
     }
-  
+    
     public KeyResponse(String address, byte[] fingerprint) {
       this(address, false, fingerprint, null, null);
     }
-  
+    
     public byte[] getFingerprint() {
       return fingerprint;
     }
-  
+    
     SessionRecord getSessionRecord() {
       return sessionRecord;
     }
-  
+    
     SymmetricSignalProtocolParameters getParameters() {
       return parameters;
     }
@@ -190,5 +189,4 @@ public abstract class Message {
       super(address, valid);
     }
   }
-  
 }

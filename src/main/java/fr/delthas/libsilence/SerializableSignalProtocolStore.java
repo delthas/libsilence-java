@@ -1,6 +1,9 @@
 package fr.delthas.libsilence;
 
-import org.whispersystems.libsignal.*;
+import org.whispersystems.libsignal.IdentityKey;
+import org.whispersystems.libsignal.IdentityKeyPair;
+import org.whispersystems.libsignal.InvalidKeyIdException;
+import org.whispersystems.libsignal.SignalProtocolAddress;
 import org.whispersystems.libsignal.state.PreKeyRecord;
 import org.whispersystems.libsignal.state.SessionRecord;
 import org.whispersystems.libsignal.state.SignalProtocolStore;
@@ -9,7 +12,6 @@ import org.whispersystems.libsignal.util.KeyHelper;
 
 import java.io.*;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -34,7 +36,7 @@ class SerializableSignalProtocolStore implements SignalProtocolStore {
         dis.readFully(value);
         sessions.put(new SignalProtocolAddress(keyNumber, keyId), value);
       }
-  
+      
       size = dis.readInt();
       for (int i = 0; i < size; ++i) {
         String keyNumber = dis.readUTF();
@@ -43,42 +45,42 @@ class SerializableSignalProtocolStore implements SignalProtocolStore {
         dis.readFully(value);
         trustedKeys.put(new SignalProtocolAddress(keyNumber, keyId), new IdentityKey(value, 0));
       }
-  
+      
       byte[] value = new byte[dis.readInt()];
       dis.readFully(value);
       identityKeyPair = new IdentityKeyPair(value);
       
       localRegistrationId = dis.readInt();
-    } catch(IOException ex) {
+    } catch (IOException ex) {
       throw ex;
-    } catch(Exception ex) {
+    } catch (Exception ex) {
       throw new IOException("invalid input data", ex);
     }
   }
   
   public void save(OutputStream out) throws IOException {
-    try(DataOutputStream dos = new DataOutputStream(out)) {
+    try (DataOutputStream dos = new DataOutputStream(out)) {
       dos.writeInt(sessions.size());
-      for(Map.Entry<SignalProtocolAddress, byte[]> entry : sessions.entrySet()) {
+      for (Map.Entry<SignalProtocolAddress, byte[]> entry : sessions.entrySet()) {
         dos.writeUTF(entry.getKey().getName());
         dos.writeInt(entry.getKey().getDeviceId());
         dos.writeInt(entry.getValue().length);
         dos.write(entry.getValue());
       }
-  
+      
       dos.writeInt(trustedKeys.size());
-      for(Map.Entry<SignalProtocolAddress, IdentityKey> entry : trustedKeys.entrySet()) {
+      for (Map.Entry<SignalProtocolAddress, IdentityKey> entry : trustedKeys.entrySet()) {
         dos.writeUTF(entry.getKey().getName());
         dos.writeInt(entry.getKey().getDeviceId());
         byte[] data = entry.getValue().serialize();
         dos.writeInt(data.length);
         dos.write(data);
       }
-  
+      
       byte[] data = identityKeyPair.serialize();
       dos.writeInt(data.length);
       dos.write(data);
-  
+      
       dos.writeInt(localRegistrationId);
     }
   }

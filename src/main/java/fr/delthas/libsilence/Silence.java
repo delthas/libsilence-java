@@ -33,13 +33,14 @@ public class Silence {
   private static final String[] MESSAGE_TYPES = {"TSK", "TSM", "TSP", "TSE", "TSX"};
   private static final Base64.Encoder encoder;
   private static final Base64.Decoder decoder;
-
+  
   static {
     encoder = Base64.getEncoder().withoutPadding();
     decoder = Base64.getDecoder();
   }
   
   private SerializableSignalProtocolStore sessionStore;
+  private Object lock = new Object();
   
   public Silence(InputStream in) throws IOException {
     sessionStore = new SerializableSignalProtocolStore(in);
@@ -54,40 +55,77 @@ public class Silence {
     }
   }
   
-  public void save(OutputStream out) throws IOException {
-    sessionStore.save(Objects.requireNonNull(out));
+  public final void saveTo(OutputStream out) throws IOException {
+    synchronized (lock) {
+      sessionStore.save(Objects.requireNonNull(out));
+    }
   }
   
   public Optional<String> encryptText(String address, String text) {
-    return Optional.ofNullable(_encryptText(address, text));
+    synchronized (lock) {
+      return Optional.ofNullable(_encryptText(address, text));
+    }
   }
   
   public String encryptKeyInit(String address) {
-    return _encryptKeyInit(address, true);
+    synchronized (lock) {
+      return _encryptKeyInit(address, true);
+    }
   }
   
   public Optional<String> encryptKeyResponse(Message.KeyInit keyInit) {
-    _acceptKeyInit(keyInit);
-    return Optional.of(_encryptKeyResponse(keyInit));
+    synchronized (lock) {
+      _acceptKeyInit(keyInit);
+      return Optional.of(_encryptKeyResponse(keyInit));
+    }
   }
   
   public Optional<String> encryptSessionEnd(String addressString) {
-    String encrypted = _encryptSessionEnd(addressString);
-    if (encrypted == null) {
-      return Optional.empty();
+    synchronized (lock) {
+      String encrypted = _encryptSessionEnd(addressString);
+      if (encrypted == null) {
+        return Optional.empty();
+      }
+      _endSession(addressString);
+      return Optional.of(encrypted);
     }
-    _endSession(addressString);
-    return Optional.of(encrypted);
+  }
+  
+  public Optional<Message> decrypt(String addressString, String text) {
+    synchronized (lock) {
+      Optional<String> header = _getHeader(addressString, text);
+      if (!header.isPresent()) {
+        return Optional.empty();
+      }
+      Optional<Message> message = _decrypt(addressString, header.get(), text);
+      if (message.isPresent() && message.get().isValid()) {
+        Message m = message.get();
+        switch (m.getType()) {
+          case KEY_REPLY:
+            _acceptKeyResponse(m.asKeyResponse());
+            break;
+          case SESSION_END:
+            _endSession(m.getAddress());
+            break;
+          default:
+        }
+      }
+      return message;
+    }
   }
   
   public final Optional<byte[]> getFingerprint(String address) {
-    Objects.requireNonNull(address);
-    SignalProtocolAddress address_ = new SignalProtocolAddress(address, 1);
-    return Optional.ofNullable(sessionStore.loadSession(address_).getSessionState().serialize());
+    synchronized (lock) {
+      Objects.requireNonNull(address);
+      SignalProtocolAddress address_ = new SignalProtocolAddress(address, 1);
+      return Optional.ofNullable(sessionStore.loadSession(address_).getSessionState().serialize());
+    }
   }
   
   public final byte[] getSelfFingerprint() {
-    return sessionStore.getIdentityKeyPair().getPublicKey().serialize();
+    synchronized (lock) {
+      return sessionStore.getIdentityKeyPair().getPublicKey().serialize();
+    }
   }
   
   protected final String _encryptText(String address, String text) {
@@ -95,40 +133,36 @@ public class Silence {
   }
   
   protected final String _encryptKeyInit(String address, boolean resetSession) {
-    
     SignalProtocolAddress remoteAddress = new SignalProtocolAddress(address, 1);
-    
-    synchronized (SessionCipher.SESSION_LOCK) {
-      try {
-        int sequence = KeyHelper.getRandomSequence(65534) + 1;
-        int flags = 0x01;
-        ECKeyPair baseKey = Curve.generateKeyPair();
-        ECKeyPair ratchetKey = Curve.generateKeyPair();
-        IdentityKeyPair identityKey = sessionStore.getIdentityKeyPair();
-        byte[] baseKeySignature = Curve.calculateSignature(identityKey.getPrivateKey(), baseKey.getPublicKey().serialize());
-        SessionRecord sessionRecord = sessionStore.loadSession(remoteAddress);
-        
-        sessionRecord.getSessionState().setPendingKeyExchange(sequence, baseKey, ratchetKey, identityKey);
-        sessionStore.storeSession(remoteAddress, sessionRecord);
-        
-        
-        int supportedVersion = CiphertextMessage.CURRENT_VERSION;
-        int version = CiphertextMessage.CURRENT_VERSION;
-        
-        byte[] versionBytes = {ByteUtil.intsToByteHighAndLow(version, supportedVersion)};
-        SignalProtos.KeyExchangeMessage.Builder keyBuilder = SignalProtos.KeyExchangeMessage
-                .newBuilder()
-                .setId((sequence << 5) | flags)
-                .setBaseKey(ByteString.copyFrom(baseKey.getPublicKey().serialize()))
-                .setRatchetKey(ByteString.copyFrom(ratchetKey.getPublicKey().serialize()))
-                .setIdentityKey(ByteString.copyFrom(identityKey.getPublicKey().serialize()));
-        
-        keyBuilder.setBaseKeySignature(ByteString.copyFrom(baseKeySignature));
-        
-        return encrypt(address, encoder.encodeToString(ByteUtil.combine(versionBytes, keyBuilder.build().toByteArray())), "TSK");
-      } catch (InvalidKeyException e) {
-        throw new AssertionError(e);
-      }
+    try {
+      int sequence = KeyHelper.getRandomSequence(65534) + 1;
+      int flags = 0x01;
+      ECKeyPair baseKey = Curve.generateKeyPair();
+      ECKeyPair ratchetKey = Curve.generateKeyPair();
+      IdentityKeyPair identityKey = sessionStore.getIdentityKeyPair();
+      byte[] baseKeySignature = Curve.calculateSignature(identityKey.getPrivateKey(), baseKey.getPublicKey().serialize());
+      SessionRecord sessionRecord = sessionStore.loadSession(remoteAddress);
+      
+      sessionRecord.getSessionState().setPendingKeyExchange(sequence, baseKey, ratchetKey, identityKey);
+      sessionStore.storeSession(remoteAddress, sessionRecord);
+      
+      
+      int supportedVersion = CiphertextMessage.CURRENT_VERSION;
+      int version = CiphertextMessage.CURRENT_VERSION;
+      
+      byte[] versionBytes = {ByteUtil.intsToByteHighAndLow(version, supportedVersion)};
+      SignalProtos.KeyExchangeMessage.Builder keyBuilder = SignalProtos.KeyExchangeMessage
+              .newBuilder()
+              .setId((sequence << 5) | flags)
+              .setBaseKey(ByteString.copyFrom(baseKey.getPublicKey().serialize()))
+              .setRatchetKey(ByteString.copyFrom(ratchetKey.getPublicKey().serialize()))
+              .setIdentityKey(ByteString.copyFrom(identityKey.getPublicKey().serialize()));
+      
+      keyBuilder.setBaseKeySignature(ByteString.copyFrom(baseKeySignature));
+      
+      return encrypt(address, encoder.encodeToString(ByteUtil.combine(versionBytes, keyBuilder.build().toByteArray())), "TSK");
+    } catch (InvalidKeyException e) {
+      throw new AssertionError(e);
     }
   }
   
@@ -245,27 +279,6 @@ public class Silence {
     return encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2]}) + message;
   }
   
-  public Optional<Message> decrypt(String addressString, String text) {
-    Optional<String> header = _getHeader(addressString, text);
-    if (!header.isPresent()) {
-      return Optional.empty();
-    }
-    Optional<Message> message = _decrypt(addressString, header.get(), text);
-    if (message.isPresent() && message.get().isValid()) {
-      Message m = message.get();
-      switch (m.getType()) {
-        case KEY_REPLY:
-          _acceptKeyResponse(m.asKeyResponse());
-          break;
-        case SESSION_END:
-          _endSession(m.getAddress());
-          break;
-        default:
-      }
-    }
-    return message;
-  }
-  
   protected final Optional<String> _getHeader(String addressString, String message) {
     if (message.length() <= 4) {
       return Optional.empty();
@@ -345,80 +358,78 @@ public class Silence {
           
           boolean initial = (flags & 0x01) != 0;
           
-          synchronized (SessionCipher.SESSION_LOCK) {
-            if (!sessionStore.isTrustedIdentity(address, identityKey, null)) {
-              if (initial) {
-                return Optional.of(new Message.KeyInit(addressString, identityKey.serialize()));
-              }
+          if (!sessionStore.isTrustedIdentity(address, identityKey, null)) {
+            if (initial) {
+              return Optional.of(new Message.KeyInit(addressString, identityKey.serialize()));
+            }
+            return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
+          }
+          
+          if (initial) {
+            flags = 0X02;
+            SessionRecord sessionRecord = sessionStore.loadSession(address);
+            
+            if (!Curve.verifySignature(identityKey.getPublicKey(),
+                    baseKey.serialize(),
+                    baseKeySignature)) {
+              return Optional.of(new Message.KeyInit(addressString, identityKey.serialize()));
+            }
+            
+            SymmetricSignalProtocolParameters.Builder builder = SymmetricSignalProtocolParameters.newBuilder();
+            
+            if (!sessionRecord.getSessionState().hasPendingKeyExchange()) {
+              builder.setOurIdentityKey(sessionStore.getIdentityKeyPair())
+                      .setOurBaseKey(Curve.generateKeyPair())
+                      .setOurRatchetKey(Curve.generateKeyPair());
+            } else {
+              builder.setOurIdentityKey(sessionRecord.getSessionState().getPendingKeyExchangeIdentityKey())
+                      .setOurBaseKey(sessionRecord.getSessionState().getPendingKeyExchangeBaseKey())
+                      .setOurRatchetKey(sessionRecord.getSessionState().getPendingKeyExchangeRatchetKey());
+              flags |= 0x04;
+            }
+            
+            builder.setTheirBaseKey(baseKey)
+                    .setTheirRatchetKey(ratchetKey)
+                    .setTheirIdentityKey(identityKey);
+            
+            SymmetricSignalProtocolParameters parameters = builder.create();
+            
+            if (!sessionRecord.isFresh()) { sessionRecord.archiveCurrentState(); }
+            
+            RatchetingSession.initializeSession(sessionRecord.getSessionState(), parameters);
+            
+            return Optional.of(new Message.KeyInit(addressString, true, identityKey.serialize(), flags, sequence, sessionRecord, parameters));
+          } else {
+            
+            SessionRecord sessionRecord = sessionStore.loadSession(address);
+            SessionState sessionState = sessionRecord.getSessionState();
+            boolean hasPendingKeyExchange = sessionState.hasPendingKeyExchange();
+            
+            if (!hasPendingKeyExchange || sessionState.getPendingKeyExchangeSequence() != sequence) {
               return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
             }
             
-            if (initial) {
-              flags = 0X02;
-              SessionRecord sessionRecord = sessionStore.loadSession(address);
-              
-              if (!Curve.verifySignature(identityKey.getPublicKey(),
-                      baseKey.serialize(),
-                      baseKeySignature)) {
-                return Optional.of(new Message.KeyInit(addressString, identityKey.serialize()));
-              }
-              
-              SymmetricSignalProtocolParameters.Builder builder = SymmetricSignalProtocolParameters.newBuilder();
-              
-              if (!sessionRecord.getSessionState().hasPendingKeyExchange()) {
-                builder.setOurIdentityKey(sessionStore.getIdentityKeyPair())
-                        .setOurBaseKey(Curve.generateKeyPair())
-                        .setOurRatchetKey(Curve.generateKeyPair());
-              } else {
-                builder.setOurIdentityKey(sessionRecord.getSessionState().getPendingKeyExchangeIdentityKey())
-                        .setOurBaseKey(sessionRecord.getSessionState().getPendingKeyExchangeBaseKey())
-                        .setOurRatchetKey(sessionRecord.getSessionState().getPendingKeyExchangeRatchetKey());
-                flags |= 0x04;
-              }
-              
-              builder.setTheirBaseKey(baseKey)
-                      .setTheirRatchetKey(ratchetKey)
-                      .setTheirIdentityKey(identityKey);
-              
-              SymmetricSignalProtocolParameters parameters = builder.create();
-  
-              if (!sessionRecord.isFresh()) { sessionRecord.archiveCurrentState(); }
-              
-              RatchetingSession.initializeSession(sessionRecord.getSessionState(), parameters);
-              
-              return Optional.of(new Message.KeyInit(addressString, true, identityKey.serialize(), flags, sequence, sessionRecord, parameters));
-            } else {
-              
-              SessionRecord sessionRecord = sessionStore.loadSession(address);
-              SessionState sessionState = sessionRecord.getSessionState();
-              boolean hasPendingKeyExchange = sessionState.hasPendingKeyExchange();
-              
-              if (!hasPendingKeyExchange || sessionState.getPendingKeyExchangeSequence() != sequence) {
-                return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
-              }
-              
-              SymmetricSignalProtocolParameters.Builder builder = SymmetricSignalProtocolParameters.newBuilder();
-              
-              builder.setOurBaseKey(sessionRecord.getSessionState().getPendingKeyExchangeBaseKey())
-                      .setOurRatchetKey(sessionRecord.getSessionState().getPendingKeyExchangeRatchetKey())
-                      .setOurIdentityKey(sessionRecord.getSessionState().getPendingKeyExchangeIdentityKey())
-                      .setTheirBaseKey(baseKey)
-                      .setTheirRatchetKey(ratchetKey)
-                      .setTheirIdentityKey(identityKey);
-  
-              if (!sessionRecord.isFresh()) { sessionRecord.archiveCurrentState(); }
-              
-              SymmetricSignalProtocolParameters parameters = builder.create();
-              RatchetingSession.initializeSession(sessionRecord.getSessionState(), parameters);
-              
-              if (!Curve.verifySignature(identityKey.getPublicKey(),
-                      baseKey.serialize(),
-                      baseKeySignature)) {
-                return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
-              }
-              
-              return Optional.of(new Message.KeyResponse(addressString, true, identityKey.serialize(), sessionRecord, parameters));
+            SymmetricSignalProtocolParameters.Builder builder = SymmetricSignalProtocolParameters.newBuilder();
+            
+            builder.setOurBaseKey(sessionRecord.getSessionState().getPendingKeyExchangeBaseKey())
+                    .setOurRatchetKey(sessionRecord.getSessionState().getPendingKeyExchangeRatchetKey())
+                    .setOurIdentityKey(sessionRecord.getSessionState().getPendingKeyExchangeIdentityKey())
+                    .setTheirBaseKey(baseKey)
+                    .setTheirRatchetKey(ratchetKey)
+                    .setTheirIdentityKey(identityKey);
+            
+            if (!sessionRecord.isFresh()) { sessionRecord.archiveCurrentState(); }
+            
+            SymmetricSignalProtocolParameters parameters = builder.create();
+            RatchetingSession.initializeSession(sessionRecord.getSessionState(), parameters);
+            
+            if (!Curve.verifySignature(identityKey.getPublicKey(),
+                    baseKey.serialize(),
+                    baseKeySignature)) {
+              return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
             }
+            
+            return Optional.of(new Message.KeyResponse(addressString, true, identityKey.serialize(), sessionRecord, parameters));
           }
         }
         case "TSM":
@@ -459,50 +470,140 @@ public class Silence {
           byte[] ciphertext = whisperMessage.getCiphertext().toByteArray();
           byte[] plaintext = null;
           
-          synchronized (SessionCipher.SESSION_LOCK) {
+          if (!sessionStore.containsSession(address)) {
+            return getInvalidText(addressString, type);
+          }
+          
+          SessionRecord sessionRecord = sessionStore.loadSession(address);
+          
+          
+          Iterator<SessionState> previousStates = sessionRecord.getPreviousSessionStates().iterator();
+          
+          {
+            SessionState sessionState = new SessionState(sessionRecord.getSessionState());
             
-            if (!sessionStore.containsSession(address)) {
+            if (!sessionState.hasSenderChain()) {
               return getInvalidText(addressString, type);
             }
             
-            SessionRecord sessionRecord = sessionStore.loadSession(address);
+            if (messageVersion != sessionState.getSessionVersion()) {
+              return getInvalidText(addressString, type);
+            }
             
-            
-            Iterator<SessionState> previousStates = sessionRecord.getPreviousSessionStates().iterator();
-            
-            {
-              SessionState sessionState = new SessionState(sessionRecord.getSessionState());
+            ChainKey chainKey;
+            if (sessionState.hasReceiverChain(senderRatchetKey)) {
+              chainKey = sessionState.getReceiverChainKey(senderRatchetKey);
+            } else {
+              RootKey rootKey = sessionState.getRootKey();
+              ECKeyPair ourEphemeral = sessionState.getSenderRatchetKeyPair();
+              Pair<RootKey, ChainKey> receiverChain = rootKey.createChain(senderRatchetKey, ourEphemeral);
+              ECKeyPair ourNewEphemeral = Curve.generateKeyPair();
+              Pair<RootKey, ChainKey> senderChain = receiverChain.first().createChain(senderRatchetKey, ourNewEphemeral);
               
-              if (!sessionState.hasSenderChain()) {
+              sessionState.setRootKey(senderChain.first());
+              sessionState.addReceiverChain(senderRatchetKey, receiverChain.second());
+              sessionState.setPreviousCounter(Math.max(sessionState.getSenderChainKey().getIndex() - 1, 0));
+              sessionState.setSenderChain(ourNewEphemeral, senderChain.second());
+              
+              chainKey = receiverChain.second();
+            }
+            
+            MessageKeys messageKeys;
+            if (chainKey.getIndex() > counter) {
+              if (sessionState.hasMessageKeys(senderRatchetKey, counter)) {
+                messageKeys = sessionState.removeMessageKeys(senderRatchetKey, counter);
+              } else {
+                return getInvalidText(addressString, type);
+              }
+            } else {
+              if (counter - chainKey.getIndex() > 2000) {
+                return getInvalidText(addressString, type);
+              }
+              while (chainKey.getIndex() < counter) {
+                messageKeys = chainKey.getMessageKeys();
+                sessionState.setMessageKeys(senderRatchetKey, messageKeys);
+                chainKey = chainKey.getNextChainKey();
+              }
+              sessionState.setReceiverChainKey(senderRatchetKey, chainKey.getNextChainKey());
+              messageKeys = chainKey.getMessageKeys();
+            }
+            
+            byte[][] parts = ByteUtil.split(decoded, decoded.length - 8, 8);
+            
+            Mac macInstance = null;
+            try {
+              macInstance = Mac.getInstance("HmacSHA256");
+            } catch (NoSuchAlgorithmException e) {
+              throw new AssertionError(e);
+            }
+            macInstance.init(messageKeys.getMacKey());
+            
+            if (messageVersion >= 3) {
+              macInstance.update(sessionState.getRemoteIdentityKey().getPublicKey().serialize());
+              macInstance.update(sessionState.getLocalIdentityKey().getPublicKey().serialize());
+            }
+            
+            byte[] fullMac = macInstance.doFinal(parts[0]);
+            byte[] ourMac = ByteUtil.trim(fullMac, 8);
+            
+            byte[] theirMac = parts[1];
+            
+            if (!MessageDigest.isEqual(ourMac, theirMac)) {
+              return getInvalidText(addressString, type);
+            }
+            
+            Cipher cipher;
+            
+            if (version >= 3) {
+              cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+              cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), messageKeys.getIv());
+            } else {
+              cipher = Cipher.getInstance("AES/CTR/NoPadding");
+              byte[] ivBytes = new byte[16];
+              ByteUtil.intToByteArray(ivBytes, 0, counter);
+              IvParameterSpec iv = new IvParameterSpec(ivBytes);
+              cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), iv);
+            }
+            plaintext = cipher.doFinal(ciphertext);
+            
+            sessionState.clearUnacknowledgedPreKeyMessage();
+            sessionRecord.setState(sessionState);
+          }
+          
+          while (plaintext == null && previousStates.hasNext()) {
+            {
+              SessionState promotedState = new SessionState(previousStates.next());
+              
+              if (!promotedState.hasSenderChain()) {
                 return getInvalidText(addressString, type);
               }
               
-              if (messageVersion != sessionState.getSessionVersion()) {
+              if (messageVersion != promotedState.getSessionVersion()) {
                 return getInvalidText(addressString, type);
               }
               
               ChainKey chainKey;
-              if (sessionState.hasReceiverChain(senderRatchetKey)) {
-                chainKey = sessionState.getReceiverChainKey(senderRatchetKey);
+              if (promotedState.hasReceiverChain(senderRatchetKey)) {
+                chainKey = promotedState.getReceiverChainKey(senderRatchetKey);
               } else {
-                RootKey rootKey = sessionState.getRootKey();
-                ECKeyPair ourEphemeral = sessionState.getSenderRatchetKeyPair();
+                RootKey rootKey = promotedState.getRootKey();
+                ECKeyPair ourEphemeral = promotedState.getSenderRatchetKeyPair();
                 Pair<RootKey, ChainKey> receiverChain = rootKey.createChain(senderRatchetKey, ourEphemeral);
                 ECKeyPair ourNewEphemeral = Curve.generateKeyPair();
                 Pair<RootKey, ChainKey> senderChain = receiverChain.first().createChain(senderRatchetKey, ourNewEphemeral);
                 
-                sessionState.setRootKey(senderChain.first());
-                sessionState.addReceiverChain(senderRatchetKey, receiverChain.second());
-                sessionState.setPreviousCounter(Math.max(sessionState.getSenderChainKey().getIndex() - 1, 0));
-                sessionState.setSenderChain(ourNewEphemeral, senderChain.second());
+                promotedState.setRootKey(senderChain.first());
+                promotedState.addReceiverChain(senderRatchetKey, receiverChain.second());
+                promotedState.setPreviousCounter(Math.max(promotedState.getSenderChainKey().getIndex() - 1, 0));
+                promotedState.setSenderChain(ourNewEphemeral, senderChain.second());
                 
                 chainKey = receiverChain.second();
               }
               
               MessageKeys messageKeys;
               if (chainKey.getIndex() > counter) {
-                if (sessionState.hasMessageKeys(senderRatchetKey, counter)) {
-                  messageKeys = sessionState.removeMessageKeys(senderRatchetKey, counter);
+                if (promotedState.hasMessageKeys(senderRatchetKey, counter)) {
+                  messageKeys = promotedState.removeMessageKeys(senderRatchetKey, counter);
                 } else {
                   return getInvalidText(addressString, type);
                 }
@@ -512,26 +613,21 @@ public class Silence {
                 }
                 while (chainKey.getIndex() < counter) {
                   messageKeys = chainKey.getMessageKeys();
-                  sessionState.setMessageKeys(senderRatchetKey, messageKeys);
+                  promotedState.setMessageKeys(senderRatchetKey, messageKeys);
                   chainKey = chainKey.getNextChainKey();
                 }
-                sessionState.setReceiverChainKey(senderRatchetKey, chainKey.getNextChainKey());
+                promotedState.setReceiverChainKey(senderRatchetKey, chainKey.getNextChainKey());
                 messageKeys = chainKey.getMessageKeys();
               }
               
               byte[][] parts = ByteUtil.split(decoded, decoded.length - 8, 8);
               
-              Mac macInstance = null;
-              try {
-                macInstance = Mac.getInstance("HmacSHA256");
-              } catch (NoSuchAlgorithmException e) {
-                throw new AssertionError(e);
-              }
+              Mac macInstance = Mac.getInstance("HmacSHA256");
               macInstance.init(messageKeys.getMacKey());
               
               if (messageVersion >= 3) {
-                macInstance.update(sessionState.getRemoteIdentityKey().getPublicKey().serialize());
-                macInstance.update(sessionState.getLocalIdentityKey().getPublicKey().serialize());
+                macInstance.update(promotedState.getRemoteIdentityKey().getPublicKey().serialize());
+                macInstance.update(promotedState.getLocalIdentityKey().getPublicKey().serialize());
               }
               
               byte[] fullMac = macInstance.doFinal(parts[0]);
@@ -557,106 +653,18 @@ public class Silence {
               }
               plaintext = cipher.doFinal(ciphertext);
               
-              sessionState.clearUnacknowledgedPreKeyMessage();
-              sessionRecord.setState(sessionState);
+              promotedState.clearUnacknowledgedPreKeyMessage();
+              
+              previousStates.remove();
+              sessionRecord.promoteState(promotedState);
             }
-            
-            while (plaintext == null && previousStates.hasNext()) {
-              {
-                SessionState promotedState = new SessionState(previousStates.next());
-                
-                if (!promotedState.hasSenderChain()) {
-                  return getInvalidText(addressString, type);
-                }
-                
-                if (messageVersion != promotedState.getSessionVersion()) {
-                  return getInvalidText(addressString, type);
-                }
-                
-                ChainKey chainKey;
-                if (promotedState.hasReceiverChain(senderRatchetKey)) {
-                  chainKey = promotedState.getReceiverChainKey(senderRatchetKey);
-                } else {
-                  RootKey rootKey = promotedState.getRootKey();
-                  ECKeyPair ourEphemeral = promotedState.getSenderRatchetKeyPair();
-                  Pair<RootKey, ChainKey> receiverChain = rootKey.createChain(senderRatchetKey, ourEphemeral);
-                  ECKeyPair ourNewEphemeral = Curve.generateKeyPair();
-                  Pair<RootKey, ChainKey> senderChain = receiverChain.first().createChain(senderRatchetKey, ourNewEphemeral);
-                  
-                  promotedState.setRootKey(senderChain.first());
-                  promotedState.addReceiverChain(senderRatchetKey, receiverChain.second());
-                  promotedState.setPreviousCounter(Math.max(promotedState.getSenderChainKey().getIndex() - 1, 0));
-                  promotedState.setSenderChain(ourNewEphemeral, senderChain.second());
-                  
-                  chainKey = receiverChain.second();
-                }
-                
-                MessageKeys messageKeys;
-                if (chainKey.getIndex() > counter) {
-                  if (promotedState.hasMessageKeys(senderRatchetKey, counter)) {
-                    messageKeys = promotedState.removeMessageKeys(senderRatchetKey, counter);
-                  } else {
-                    return getInvalidText(addressString, type);
-                  }
-                } else {
-                  if (counter - chainKey.getIndex() > 2000) {
-                    return getInvalidText(addressString, type);
-                  }
-                  while (chainKey.getIndex() < counter) {
-                    messageKeys = chainKey.getMessageKeys();
-                    promotedState.setMessageKeys(senderRatchetKey, messageKeys);
-                    chainKey = chainKey.getNextChainKey();
-                  }
-                  promotedState.setReceiverChainKey(senderRatchetKey, chainKey.getNextChainKey());
-                  messageKeys = chainKey.getMessageKeys();
-                }
-                
-                byte[][] parts = ByteUtil.split(decoded, decoded.length - 8, 8);
-                
-                Mac macInstance = Mac.getInstance("HmacSHA256");
-                macInstance.init(messageKeys.getMacKey());
-                
-                if (messageVersion >= 3) {
-                  macInstance.update(promotedState.getRemoteIdentityKey().getPublicKey().serialize());
-                  macInstance.update(promotedState.getLocalIdentityKey().getPublicKey().serialize());
-                }
-                
-                byte[] fullMac = macInstance.doFinal(parts[0]);
-                byte[] ourMac = ByteUtil.trim(fullMac, 8);
-                
-                byte[] theirMac = parts[1];
-                
-                if (!MessageDigest.isEqual(ourMac, theirMac)) {
-                  return getInvalidText(addressString, type);
-                }
-                
-                Cipher cipher;
-                
-                if (version >= 3) {
-                  cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                  cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), messageKeys.getIv());
-                } else {
-                  cipher = Cipher.getInstance("AES/CTR/NoPadding");
-                  byte[] ivBytes = new byte[16];
-                  ByteUtil.intToByteArray(ivBytes, 0, counter);
-                  IvParameterSpec iv = new IvParameterSpec(ivBytes);
-                  cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), iv);
-                }
-                plaintext = cipher.doFinal(ciphertext);
-                
-                promotedState.clearUnacknowledgedPreKeyMessage();
-                
-                previousStates.remove();
-                sessionRecord.promoteState(promotedState);
-              }
-            }
-            
-            if (plaintext == null) {
-              return getInvalidText(addressString, type);
-            }
-            
-            sessionStore.storeSession(address, sessionRecord);
           }
+          
+          if (plaintext == null) {
+            return getInvalidText(addressString, type);
+          }
+          
+          sessionStore.storeSession(address, sessionRecord);
           
           int paddingBeginsIndex = 0;
           for (int i = 1; i < plaintext.length; i++) {
@@ -693,20 +701,24 @@ public class Silence {
   }
   
   static {
-  
+    
     // ugly piece of code to bypass Oracle JRE stupid restriction on key lengths
     // Silence requires a 256-bit key AES cipher, but Oracle will only allow a key length <= 128-bit due to US export laws
-  
+    
     // the normal ways to fix this are:
     // a) to stop using Oracle JRE
     // b) to replace two files in the Oracle JRE folder (see http://stackoverflow.com/a/3864276)
     // c) to use a simple 128-bit key instead of a 256-bit one
     // d) to use an external Cipher implementation (like BouncyCastle)
-  
+    
     // however, none of these ways are practical, or lightweight enough
     // so we have to manually override the permissions on key lengths using reflection
-  
+    
     // ugly reflection hack start (we have to override a private static final field from a package-private class...)
+    
+    String errorString = "Failed manually overriding key-length permissions. "
+            + "Please open an issue at https://github.com/delthas/libsilence-java/issues/ if you see this message. "
+            + "Try doing this to fix the problem: http://stackoverflow.com/a/3864276";
     
     int newMaxKeyLength;
     try {
@@ -741,14 +753,13 @@ public class Silence {
         newMaxKeyLength = Cipher.getMaxAllowedKeyLength("AES");
       }
     } catch (Exception e) {
-      System.err.println("Error when overriding AES key length");
-      e.printStackTrace();
-      throw new RuntimeException("failed overriding AES key length", e);
+      System.err.println(errorString);
+      throw new RuntimeException(errorString, e);
     }
     if (newMaxKeyLength < 256) {
       // hack failed
-      System.err.println("Failed overriding AES key length");
-      throw new RuntimeException("failed overriding AES key length");
+      System.err.println(errorString);
+      throw new RuntimeException(errorString);
     }
   }
 }

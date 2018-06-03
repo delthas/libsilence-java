@@ -8,7 +8,6 @@ import org.junit.Test;
 import java.util.Optional;
 
 public class SilenceTest {
-  
   @Test
   public void silenceTest() {
     Silence[] silence = {new Silence(), new Silence()};
@@ -29,5 +28,4 @@ public class SilenceTest {
     Assert.assertArrayEquals(silence[0].getSelfFingerprint(), message_.asKeyInit().getFingerprint());
     Assert.assertArrayEquals(silence[1].getSelfFingerprint(), messageResponse_.asKeyResponse().getFingerprint());
   }
-  
 }
