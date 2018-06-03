@@ -29,6 +29,20 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
 
+/**
+ * The entrypoint for all encrypt and decrypt operations. <b>For general, "getting started" library usage, see <a href="https://github.com/delthas/libsilence-java">the library README</a>.</b>
+ * <p>
+ * Start by constructing a Silence instance, either by creating a fresh new state with {@link #Silence()}, or by loading it from a saved state with {@link #Silence(InputStream)}. When you're done using the instance, you must save it using {@link #saveTo(OutputStream)}.
+ * <p>
+ * Use the {@code encryptXXX} methods to create/encrypt Silence messages before sending them, and {@link #decrypt(String, String)} to decrypt incoming messages.
+ * <p>
+ * The library fully supports calls by concurrent threads. All input and output Strings are considered UTF-8 encoded. All parameters and return values of the public methods must not be null.
+ * <p>
+ * For advanced usage, you can extend the Silence class to use the lower-level protected methods that start with {@code _}.
+ *
+ * @see Silence#encryptText(String, String)
+ * @see Silence#decrypt(String, String)
+ */
 public class Silence {
   private static final String[] MESSAGE_TYPES = {"TSK", "TSM", "TSP", "TSE", "TSX"};
   private static final Base64.Encoder encoder;
@@ -42,10 +56,28 @@ public class Silence {
   private SerializableSignalProtocolStore sessionStore;
   private Object lock = new Object();
   
+  /**
+   * Create a Silence instance from saved state. The input stream <b>MUST</b> read from data previously saved with {@link #saveTo(OutputStream)}.
+   * <p>
+   * To create a fresh new Silence instance on first user, use {@link #Silence()} instead.
+   *
+   * @param in The input stream to read the saved state from.
+   * @throws IOException If an exception is thrown when reading from the stream, or if the data is invalid.
+   *
+   * @see #Silence()
+   */
   public Silence(InputStream in) throws IOException {
+    Objects.requireNonNull(in);
     sessionStore = new SerializableSignalProtocolStore(in);
   }
   
+  /**
+   * Create a fresh new Silence instance.
+   * <p>
+   * To create a Silence instance from previously saved state, use {@link #Silence(InputStream)} instead.
+   *
+   * @see #Silence(InputStream)
+   */
   public Silence() {
     try {
       sessionStore = new SerializableSignalProtocolStore(null);
@@ -55,53 +87,122 @@ public class Silence {
     }
   }
   
+  /**
+   * Save the current Silence state to the output stream.
+   * <p>
+   * The general contract regarding the state is that it may arbitrarily change after every single call to a {@code encryptXXX} or {@code decrypt} method, and that you <b>must</b> always use the current state to do all operations. This means that you must always load the state from a state saved after calling the last {@code encryptXXX} or {@code decrypt} method.
+   * @param out The output stream to write the state to.
+   * @throws IOException If an exception is thrown when reading from the stream, or if the data is invalid.
+   */
   public final void saveTo(OutputStream out) throws IOException {
     synchronized (lock) {
       sessionStore.save(Objects.requireNonNull(out));
     }
   }
   
+  /**
+   * Creates a Silence secure session begin/key initialization message.
+   * <p>
+   * The returned String, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * <p>
+   * <b>If a secure session was already established for this address, this will reset it, without sending a {@link Message.SessionEnd} message.</b> You may encrypt and send a {@link Message.SessionEnd} first to avoid this.
+   * @param address The unique identifier for the contact for which the message must be encrypted.
+   * @return The encrypted text message for the text.
+   */
+  public String encryptKeyInit(String address) {
+    synchronized (lock) {
+      return _encryptKeyInit(Objects.requireNonNull(address), true);
+    }
+  }
+  
+  /**
+   * Creates a Silence key response message.
+   * <p>
+   * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * <p>
+   * <b>This will automatically accept the KeyInit message and start the secure session so you can send encrypted text messages with {@link #encryptText(String, String)} afterwards.</b>
+   * <p>
+   * The returned Optional will be empty if the message couldn't be created, which happens if the {@link Message.KeyInit} message couldn't be trusted or if a secure session was already established. To end a secure session, send a session end message with {@link #encryptSessionEnd(String)} or decrypt one.
+   * @param keyInit The previously received {@link Message.KeyInit} message to accept.
+   * @return An Optional containing the key response message to be sent over the message transfer wire, or empty if the message couldn't be created.
+   */
+  public Optional<String> encryptKeyResponse(Message.KeyInit keyInit) {
+    synchronized (lock) {
+      _acceptKeyInit(Objects.requireNonNull(keyInit));
+      return Optional.of(_encryptKeyResponse(keyInit));
+    }
+  }
+  
+  /**
+   * Encrypts some text into a Silence encrypted text message.
+   * <p>
+   * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * <p>
+   * The returned Optional will be empty if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
+   * @param address The unique identifier for the contact for which the message must be encrypted.
+   * @param text The text to encrypt.
+   * @return An Optional containing the encrypted text message to be sent over the message transfer wire, or empty if the text couldn't be encrypted.
+   */
   public Optional<String> encryptText(String address, String text) {
+    Objects.requireNonNull(address);
+    Objects.requireNonNull(text);
     synchronized (lock) {
       return Optional.ofNullable(_encryptText(address, text));
     }
   }
   
-  public String encryptKeyInit(String address) {
+  /**
+   * Encrypts a Silence session end message.
+   * <p>
+   * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * <p>
+   * <b>This will automatically end the secure session, you won't be able to encrypt or decrypt secure messages for this session after this call.</b> You can however create a new secure session.
+   * <p>
+   * The returned Optional will be empty if the message couldn't be created, which happens which happens if no secure session is currently established for this address.
+   * @param address The unique identifier for the contact for which the message must be encrypted.
+   * @return An Optional containing the key response message to be sent over the message transfer wire, or empty if the message couldn't be created.
+   */
+  public Optional<String> encryptSessionEnd(String address) {
+    Objects.requireNonNull(address);
     synchronized (lock) {
-      return _encryptKeyInit(address, true);
-    }
-  }
-  
-  public Optional<String> encryptKeyResponse(Message.KeyInit keyInit) {
-    synchronized (lock) {
-      _acceptKeyInit(keyInit);
-      return Optional.of(_encryptKeyResponse(keyInit));
-    }
-  }
-  
-  public Optional<String> encryptSessionEnd(String addressString) {
-    synchronized (lock) {
-      String encrypted = _encryptSessionEnd(addressString);
+      String encrypted = _encryptSessionEnd(address);
       if (encrypted == null) {
         return Optional.empty();
       }
-      _endSession(addressString);
+      _endSession(address);
       return Optional.of(encrypted);
     }
   }
   
-  public Optional<Message> decrypt(String addressString, String text) {
+  /**
+   * Decrypts a Silence message.
+   * <p>
+   * <b>Since you cannot know whether received messages are Silence messages, you can use this endpoint for all incoming messages (this method will return an empty Optional is the meessage is not a Silence message).</b>
+   * <p>
+   * The text you pass should be the exact String that was sent from the underlying message transfer wire (in general, this means the exact received SMS).
+   * <p>
+   * The returned Message, if present, will be a valid {@link Message.KeyInit}, {@link Message.KeyResponse}, {@link Message.Text}, or {@link Message.SessionEnd} message corresponding to the text.
+   * <p>
+   * <b>Some automatic session processing can happen when decrypting a message, and a message should generally be decrypted only once. For example, decrypting a {@link Message.SessionEnd} message will automatically end the secure session.</b>. See the individual Message documentation for details.
+   * <p>
+   * The returned Optional will be empty if the message was not a valid Silence message or if it was invalid with regard to the secure session (for example, receiving a {@link Message.KeyInit} message when a session was already established).
+   * @param address The unique identifier for the contact from which the message was received.
+   * @param text The exact message that was received from the underlying message transfer wire.
+   * @return An Optional containing the decrypted Silence {@link Message}, or empty if the message was not a valid Silence message or was invalid.
+   */
+  public Optional<Message> decrypt(String address, String text) {
+    Objects.requireNonNull(address);
+    Objects.requireNonNull(text);
     synchronized (lock) {
-      Optional<String> header = _getHeader(addressString, text);
+      Optional<String> header = _getHeader(address, text);
       if (!header.isPresent()) {
         return Optional.empty();
       }
-      Optional<Message> message = _decrypt(addressString, header.get(), text);
+      Optional<Message> message = _decrypt(address, header.get(), text);
       if (message.isPresent() && message.get().isValid()) {
         Message m = message.get();
         switch (m.getType()) {
-          case KEY_REPLY:
+          case KEY_RESPONSE:
             _acceptKeyResponse(m.asKeyResponse());
             break;
           case SESSION_END:
@@ -114,7 +215,17 @@ public class Silence {
     }
   }
   
+  /**
+   * Returns the fingerprint of a contact with which a secure session is currently established.
+   * <p>
+   * To view the fingerprint as a string of hex characters, like in the Silence Android app, simply convert the byte array to a hex representation, for example by using {@link org.whispersystems.libsignal.util.Hex#toString(byte[])}, bundled as a dependency of this library.
+   * <p>
+   * The returned Optional will be empty if no secure session is currently established with the specified contact.
+   * @param address The unique identifier for the contact to get the fingerprint of.
+   * @return An Optional containing the fingerprint of the contact, or empty if no secure session with the contact is currently established.
+   */
   public final Optional<byte[]> getFingerprint(String address) {
+    Objects.requireNonNull(address);
     synchronized (lock) {
       Objects.requireNonNull(address);
       SignalProtocolAddress address_ = new SignalProtocolAddress(address, 1);
@@ -122,6 +233,12 @@ public class Silence {
     }
   }
   
+  /**
+   * Returns your fingerprint (the one your contacts will see when they establish a secure session with you). This fingerprint is the same for all your contacts.
+   * <p>
+   * To view the fingerprint as a string of hex characters, like in the Silence Android app, simply convert the byte array to a hex representation, for example by using {@link org.whispersystems.libsignal.util.Hex#toString(byte[])}, bundled as a dependency of this library.
+   * @return Your fingerprint.
+   */
   public final byte[] getSelfFingerprint() {
     synchronized (lock) {
       return sessionStore.getIdentityKeyPair().getPublicKey().serialize();

@@ -100,7 +100,7 @@ String text = "Very secure text message!!";
 
 Optional<String> encryptedText = silence.encryptText(address, text); 
 // The Optional will be empty if the message couldn't be encrypted because no secure
-// session was established. In our example case, this wouldn't happen
+// session is currently established. In our example case, this wouldn't happen
 if(!encryptedText.isPresent()) {
   // Handle this exceptional case
   return;
