@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>fr.delthas</groupId>
   <artifactId>libsilence-java</artifactId>
-  <version>0.1.1-SNAPSHOT</version>
+  <version>0.1.2-SNAPSHOT</version>
 
   <name>libsilence-java</name>
   <url>https://github.com/delthas/libsilence-java</url>

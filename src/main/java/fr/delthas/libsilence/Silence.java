@@ -139,6 +139,8 @@ public class Silence {
    * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
    * <p>
    * The returned Optional will be empty if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
+   * <p>
+   * <b>The text must not contain any null bytes (value 0).</b>
    * @param address The unique identifier for the contact for which the message must be encrypted.
    * @param text The text to encrypt.
    * @return An Optional containing the encrypted text message to be sent over the message transfer wire, or empty if the text couldn't be encrypted.
@@ -783,20 +785,15 @@ public class Silence {
           
           sessionStore.storeSession(address, sessionRecord);
           
-          int paddingBeginsIndex = 0;
-          for (int i = 1; i < plaintext.length; i++) {
+          int messageLength = plaintext.length;
+          for (int i = 0; i < plaintext.length; i++) {
             if (plaintext[i] == (byte) 0x00) {
-              paddingBeginsIndex = i;
+              messageLength = i;
               break;
             }
           }
-          if (paddingBeginsIndex != 0) {
-            byte[] messagePaddingBytes = new byte[paddingBeginsIndex];
-            System.arraycopy(plaintext, 0, messagePaddingBytes, 0, messagePaddingBytes.length);
-            plaintext = messagePaddingBytes;
-          }
           
-          message = new String(plaintext, StandardCharsets.UTF_8);
+          message = new String(plaintext, 0, messageLength, StandardCharsets.UTF_8);
           if (type.equals("TSE")) {
             return Optional.of(new Message.SessionEnd(addressString, "TERMINATE".equals(message)));
           }

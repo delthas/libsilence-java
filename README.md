@@ -20,7 +20,7 @@ libsilence-java requires Java >= 8 to run. You can get this library using Maven 
     <dependency>       
            <groupId>fr.delthas</groupId>
            <artifactId>libsilence-java</artifactId>
-           <version>0.1.0</version>
+           <version>0.1.1</version>
     </dependency>
 </dependencies>
 ```
