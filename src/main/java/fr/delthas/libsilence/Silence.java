@@ -179,7 +179,7 @@ public class Silence {
   /**
    * Decrypts a Silence message.
    * <p>
-   * <b>Since you cannot know whether received messages are Silence messages, you can use this endpoint for all incoming messages (this method will return an empty Optional is the meessage is not a Silence message).</b>
+   * <b>Since you cannot know whether received messages are Silence messages, you can use this endpoint for all incoming messages (this method will return an empty Optional if the message is not a Silence message).</b>
    * <p>
    * The text you pass should be the exact String that was sent from the underlying message transfer wire (in general, this means the exact received SMS).
    * <p>
