@@ -116,61 +116,61 @@ public class Silence {
   /**
    * Creates a Silence key response message.
    * <p>
-   * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * The returned String, if not null, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
    * <p>
    * <b>This will automatically accept the KeyInit message and start the secure session so you can send encrypted text messages with {@link #encryptText(String, String)} afterwards.</b>
    * <p>
-   * The returned Optional will be empty if the message couldn't be created, which happens if the {@link Message.KeyInit} message couldn't be trusted or if a secure session was already established. To end a secure session, send a session end message with {@link #encryptSessionEnd(String)} or decrypt one.
+   * The returned String will be null if the message couldn't be created, which happens if the {@link Message.KeyInit} message couldn't be trusted or if a secure session was already established. To end a secure session, send a session end message with {@link #encryptSessionEnd(String)} or decrypt one.
    * @param keyInit The previously received {@link Message.KeyInit} message to accept.
-   * @return An Optional containing the key response message to be sent over the message transfer wire, or empty if the message couldn't be created.
+   * @return A String containing the key response message to be sent over the message transfer wire, or null if the message couldn't be created.
    */
-  public Optional<String> encryptKeyResponse(Message.KeyInit keyInit) {
+  public String encryptKeyResponse(Message.KeyInit keyInit) {
     synchronized (lock) {
       _acceptKeyInit(Objects.requireNonNull(keyInit));
-      return Optional.of(_encryptKeyResponse(keyInit));
+      return _encryptKeyResponse(keyInit);
     }
   }
   
   /**
    * Encrypts some text into a Silence encrypted text message.
    * <p>
-   * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * The returned String, if not null, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
    * <p>
-   * The returned Optional will be empty if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
+   * The returned String will be null if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
    * <p>
    * <b>The text must not contain any null bytes (value 0).</b>
    * @param address The unique identifier for the contact for which the message must be encrypted.
    * @param text The text to encrypt.
-   * @return An Optional containing the encrypted text message to be sent over the message transfer wire, or empty if the text couldn't be encrypted.
+   * @return A String containing the encrypted text message to be sent over the message transfer wire, or null if the text couldn't be encrypted.
    */
-  public Optional<String> encryptText(String address, String text) {
+  public String encryptText(String address, String text) {
     Objects.requireNonNull(address);
     Objects.requireNonNull(text);
     synchronized (lock) {
-      return Optional.ofNullable(_encryptText(address, text));
+      return _encryptText(address, text);
     }
   }
   
   /**
    * Encrypts a Silence session end message.
    * <p>
-   * The returned String, if present, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
+   * The returned String, if not null, will be the exact String you will need to send on your underlying message transfer wire (in general, this means sending an SMS with this exact text).
    * <p>
    * <b>This will automatically end the secure session, you won't be able to encrypt or decrypt secure messages for this session after this call.</b> You can however create a new secure session.
    * <p>
-   * The returned Optional will be empty if the message couldn't be created, which happens which happens if no secure session is currently established for this address.
+   * The returned String will be null if the message couldn't be created, which happens which happens if no secure session is currently established for this address.
    * @param address The unique identifier for the contact for which the message must be encrypted.
-   * @return An Optional containing the key response message to be sent over the message transfer wire, or empty if the message couldn't be created.
+   * @return A String containing the key response message to be sent over the message transfer wire, or null if the message couldn't be created.
    */
-  public Optional<String> encryptSessionEnd(String address) {
+  public String encryptSessionEnd(String address) {
     Objects.requireNonNull(address);
     synchronized (lock) {
       String encrypted = _encryptSessionEnd(address);
       if (encrypted == null) {
-        return Optional.empty();
+        return null;
       }
       _endSession(address);
-      return Optional.of(encrypted);
+      return encrypted;
     }
   }
   
@@ -183,15 +183,15 @@ public class Silence {
    * <p>
    * The data you pass can be any arbitrary binary data, but if the message is to be sent as an MMS, the data must be the exact encoded MMS PDU data (as would be returned by e.g. {@code PduComposer(context, message).make() from the Android internal MMS library}).
    * <p>
-   * The returned {@link MultimediaMessage}, if present, will contain both a plaintext subject and some encrypted data. If the message is to be sent as an MMS, the MMS PDU that must be sent should have the exact subject {@link MultimediaMessage#getSubject()}, and have a single PDU body part with content type {@code text/plain} and value {@link MultimediaMessage#getData()}.
+   * The returned {@link MultimediaMessage}, if not null, will contain both a plaintext subject and some encrypted data. If the message is to be sent as an MMS, the MMS PDU that must be sent should have the exact subject {@link MultimediaMessage#getSubject()}, and have a single PDU body part with content type {@code text/plain} and value {@link MultimediaMessage#getData()}.
    * <p>
-   * The returned Optional will be empty if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
+   * The returned {@link MultimediaMessage} will be null if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
    * @param address The unique identifier for the contact for which the message must be encrypted.
    * @param data The data to encrypt (in the case of an MMS, the encoded MMS PDU data).
-   * @return An Optional containing the encrypted multimedia message to be sent over the message transfer wire or by MMS, or empty if the data couldn't be encrypted.
+   * @return A MultimediaMessage containing the encrypted multimedia message to be sent over the message transfer wire or by MMS, or null if the data couldn't be encrypted.
    * @see #decryptMultimedia(String, MultimediaMessage)
    */
-  public Optional<MultimediaMessage> encryptMultimedia(String address, byte[] data) {
+  public MultimediaMessage encryptMultimedia(String address, byte[] data) {
     Objects.requireNonNull(address);
     Objects.requireNonNull(data);
     synchronized (lock) {
@@ -219,9 +219,9 @@ public class Silence {
         } catch (NoSuchAlgorithmException e) {
           throw new AssertionError(e);
         }
-        return Optional.of(new MultimediaMessage(subject, encrypted));
+        return new MultimediaMessage(subject, encrypted);
       } catch (Exception e) {
-        return Optional.empty();
+        return null;
       }
     }
   }
@@ -229,36 +229,35 @@ public class Silence {
   /**
    * Decrypts a Silence message.
    * <p>
-   * <b>Since you cannot know whether received messages are Silence messages, you can use this endpoint for all incoming messages (this method will return an empty Optional if the message is not a Silence message).</b>
+   * <b>Since you cannot know whether received messages are Silence messages, you can use this endpoint for all incoming messages (this method will return null if the message is not a Silence message).</b>
    * <p>
    * The text you pass should be the exact String that was sent from the underlying message transfer wire (in general, this means the exact received SMS).
    * <p>
-   * The returned Message, if present, will be a valid {@link Message.KeyInit}, {@link Message.KeyResponse}, {@link Message.Text}, or {@link Message.SessionEnd} message corresponding to the text.
+   * The returned Message, if not null, will be a valid {@link Message.KeyInit}, {@link Message.KeyResponse}, {@link Message.Text}, or {@link Message.SessionEnd} message corresponding to the text.
    * <p>
    * <b>Some automatic session processing can happen when decrypting a message, and a message should generally be decrypted only once. For example, decrypting a {@link Message.SessionEnd} message will automatically end the secure session.</b>. See the individual Message documentation for details.
    * <p>
-   * The returned Optional will be empty if the message was not a valid Silence message or if it was invalid with regard to the secure session (for example, receiving a {@link Message.KeyInit} message when a session was already established).
+   * The returned Message will be null if the message was not a valid Silence message or if it was invalid with regard to the secure session (for example, receiving a {@link Message.KeyInit} message when a session was already established).
    * @param address The unique identifier for the contact from which the message was received.
    * @param text The exact message that was received from the underlying message transfer wire.
-   * @return An Optional containing the decrypted Silence {@link Message}, or empty if the message was not a valid Silence message or was invalid.
+   * @return A Message containing the decrypted Silence {@link Message}, or null if the message was not a valid Silence message or was invalid.
    */
-  public Optional<Message> decrypt(String address, String text) {
+  public Message decrypt(String address, String text) {
     Objects.requireNonNull(address);
     Objects.requireNonNull(text);
     synchronized (lock) {
-      Optional<String> header = _getHeader(address, text);
-      if (!header.isPresent()) {
-        return Optional.empty();
+      String header = _getHeader(address, text);
+      if (header == null) {
+        return null;
       }
-      Optional<Message> message = _decrypt(address, header.get(), text);
-      if (message.isPresent() && message.get().isValid()) {
-        Message m = message.get();
-        switch (m.getType()) {
+      Message message = _decrypt(address, header, text);
+      if (message != null && message.isValid()) {
+        switch (message.getType()) {
           case KEY_RESPONSE:
-            _acceptKeyResponse(m.asKeyResponse());
+            _acceptKeyResponse(message.asKeyResponse());
             break;
           case SESSION_END:
-            _endSession(m.getAddress());
+            _endSession(message.getAddress());
             break;
           default:
         }
@@ -274,28 +273,28 @@ public class Silence {
    * <p>
    * Only encrypted messages can be sent as multimedia messages (not key init, key response or key end messages), but for this use case it is more efficient with regard to encrypted message length and processing speed as it does not do any SMS-specific padding.
    * <p>
-   * <b>Since you cannot know whether received multimedia messages are Silence messages, you can use this endpoint for all incoming multimedia messages (this method will return an empty Optional if the message is not a Silence message).</b>
+   * <b>Since you cannot know whether received multimedia messages are Silence messages, you can use this endpoint for all incoming multimedia messages (this method will return null if the message is not a Silence message).</b>
    * <p>
    * The data you pass can be any arbitrary binary data, but if the incoming message is an MMS, it must be the exact String of the first MMS PDU part whose type is {@code text/plain}.
    * <p>
-   * The returned byte array, if present, will be a raw byte array representing the decrypted data. If the incoming message was an MMS, the decrypted data is the raw decrypted MMS PDU, that could be decoded by using e.g. {@code PduParser(data)} from the Android internal MMS library.
+   * The returned byte array, if not null, will be a raw byte array representing the decrypted data. If the incoming message was an MMS, the decrypted data is the raw decrypted MMS PDU, that could be decoded by using e.g. {@code PduParser(data)} from the Android internal MMS library.
    * <p>
    * <b>Some automatic session processing can happen when decrypting a message, and a message should generally be decrypted only once.</b>
    * <p>
-   * The returned Optional will be empty if the message was not a valid Silence message or if it was invalid with regard to the secure session.
+   * The returned byte array will be null if the message was not a valid Silence message or if it was invalid with regard to the secure session.
    * @param address The unique identifier for the contact from which the message was received.
    * @param message The encrypted multimedia message.
-   * @return An Optional containing the decrypted data (in the case of an MMS, the raw decrypted MMS PDU data), or empty if the message was not a valid Silence message or was invalid.
+   * @return A byte array containing the decrypted data (in the case of an MMS, the raw decrypted MMS PDU data), or null if the message was not a valid Silence message or was invalid.
    * @see #encryptMultimedia(String, byte[])
    * @see MultimediaMessage
    */
-  public Optional<byte[]> decryptMultimedia(String address, MultimediaMessage message) {
+  public byte[] decryptMultimedia(String address, MultimediaMessage message) {
     Objects.requireNonNull(address);
     Objects.requireNonNull(message);
     String subject = message.getSubject();
     String data = message.getData();
     if (subject.length() < 9)
-      return Optional.empty();
+      return null;
   
     String prefix = subject.substring(0, 8);
     String postfix = subject.substring(8);
@@ -315,7 +314,7 @@ public class Silence {
     String calculatedPrefix = encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
     
     if(!prefix.equals(calculatedPrefix)) {
-      return Optional.empty();
+      return null;
     }
   
     byte[] plainText;
@@ -339,11 +338,11 @@ public class Silence {
           }
         }
       } catch (Exception e) {
-        return Optional.empty();
+        return null;
       }
     }
     
-    return Optional.of(plainText);
+    return plainText;
   }
   
   /**
@@ -351,16 +350,16 @@ public class Silence {
    * <p>
    * To view the fingerprint as a string of hex characters, like in the Silence Android app, simply convert the byte array to a hex representation, for example by using {@link org.whispersystems.libsignal.util.Hex#toString(byte[])}, bundled as a dependency of this library.
    * <p>
-   * The returned Optional will be empty if no secure session is currently established with the specified contact.
+   * The returned byte array will be null if no secure session is currently established with the specified contact.
    * @param address The unique identifier for the contact to get the fingerprint of.
-   * @return An Optional containing the fingerprint of the contact, or empty if no secure session with the contact is currently established.
+   * @return A byte array containing the fingerprint of the contact, or null if no secure session with the contact is currently established.
    */
-  public final Optional<byte[]> getFingerprint(String address) {
+  public final byte[] getFingerprint(String address) {
     Objects.requireNonNull(address);
     synchronized (lock) {
       Objects.requireNonNull(address);
       SignalProtocolAddress address_ = new SignalProtocolAddress(address, 1);
-      return Optional.ofNullable(sessionStore.loadSession(address_).getSessionState().serialize());
+      return sessionStore.loadSession(address_).getSessionState().serialize();
     }
   }
   
@@ -527,9 +526,9 @@ public class Silence {
     return encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2]}) + message;
   }
   
-  protected final Optional<String> _getHeader(String addressString, String message) {
+  protected final String _getHeader(String addressString, String message) {
     if (message.length() <= 4) {
-      return Optional.empty();
+      return null;
     }
     String type = null;
     for (String prefixType : MESSAGE_TYPES) {
@@ -555,15 +554,15 @@ public class Silence {
         break;
       }
     }
-    return Optional.ofNullable(type);
+    return type;
   }
   
-  protected final Optional<Message> _decrypt(String addressString, String type, String message) {
+  protected final Message _decrypt(String addressString, String type, String message) {
     try {
       SignalProtocolAddress address = new SignalProtocolAddress(addressString, 1);
       
       if (message.length() < 4) {
-        return Optional.empty();
+        return null;
       }
       byte[] decoded = decoder.decode(message.substring(4));
       
@@ -576,17 +575,17 @@ public class Silence {
       switch (type) {
         case "TSX":
         case "TSP":
-          return Optional.empty();
+          return null;
         case "TSK": {
           byte[][] parts = ByteUtil.split(decoded, 1, decoded.length - 1);
           int version = ByteUtil.highBitsToInt(parts[0][0]);
           
           if (version < CiphertextMessage.CURRENT_VERSION) {
-            return Optional.empty();
+            return null;
           }
           
           if (version > CiphertextMessage.CURRENT_VERSION) {
-            return Optional.empty();
+            return null;
           }
           
           SignalProtos.KeyExchangeMessage keyExchangeMessage = SignalProtos.KeyExchangeMessage.parseFrom(parts[1]);
@@ -594,7 +593,7 @@ public class Silence {
           if (!keyExchangeMessage.hasId() || !keyExchangeMessage.hasBaseKey() ||
                   !keyExchangeMessage.hasRatchetKey() || !keyExchangeMessage.hasIdentityKey() ||
                   !keyExchangeMessage.hasBaseKeySignature()) {
-            return Optional.empty();
+            return null;
           }
           
           int sequence = keyExchangeMessage.getId() >> 5;
@@ -608,9 +607,9 @@ public class Silence {
           
           if (!sessionStore.isTrustedIdentity(address, identityKey, null)) {
             if (initial) {
-              return Optional.of(new Message.KeyInit(addressString, identityKey.serialize()));
+              return new Message.KeyInit(addressString, identityKey.serialize());
             }
-            return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
+            return new Message.KeyResponse(addressString, identityKey.serialize());
           }
           
           if (initial) {
@@ -620,7 +619,7 @@ public class Silence {
             if (!Curve.verifySignature(identityKey.getPublicKey(),
                     baseKey.serialize(),
                     baseKeySignature)) {
-              return Optional.of(new Message.KeyInit(addressString, identityKey.serialize()));
+              return new Message.KeyInit(addressString, identityKey.serialize());
             }
             
             SymmetricSignalProtocolParameters.Builder builder = SymmetricSignalProtocolParameters.newBuilder();
@@ -646,14 +645,14 @@ public class Silence {
             
             RatchetingSession.initializeSession(sessionRecord.getSessionState(), parameters);
             
-            return Optional.of(new Message.KeyInit(addressString, true, identityKey.serialize(), flags, sequence, sessionRecord, parameters));
+            return new Message.KeyInit(addressString, true, identityKey.serialize(), flags, sequence, sessionRecord, parameters);
           } else {
             SessionRecord sessionRecord = sessionStore.loadSession(address);
             SessionState sessionState = sessionRecord.getSessionState();
             boolean hasPendingKeyExchange = sessionState.hasPendingKeyExchange();
             
             if (!hasPendingKeyExchange || sessionState.getPendingKeyExchangeSequence() != sequence) {
-              return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
+              return new Message.KeyResponse(addressString, identityKey.serialize());
             }
             
             SymmetricSignalProtocolParameters.Builder builder = SymmetricSignalProtocolParameters.newBuilder();
@@ -673,10 +672,10 @@ public class Silence {
             if (!Curve.verifySignature(identityKey.getPublicKey(),
                     baseKey.serialize(),
                     baseKeySignature)) {
-              return Optional.of(new Message.KeyResponse(addressString, identityKey.serialize()));
+              return new Message.KeyResponse(addressString, identityKey.serialize());
             }
             
-            return Optional.of(new Message.KeyResponse(addressString, true, identityKey.serialize(), sessionRecord, parameters));
+            return new Message.KeyResponse(addressString, true, identityKey.serialize(), sessionRecord, parameters);
           }
         }
         case "TSM":
@@ -700,9 +699,9 @@ public class Silence {
           
           message = new String(plaintext, 0, messageLength, StandardCharsets.UTF_8);
           if (type.equals("TSE")) {
-            return Optional.of(new Message.SessionEnd(addressString, "TERMINATE".equals(message)));
+            return new Message.SessionEnd(addressString, "TERMINATE".equals(message));
           }
-          return Optional.of(new Message.Text(addressString, true, message));
+          return new Message.Text(addressString, true, message);
         }
         default:
           throw new AssertionError("impossible header: " + type);
@@ -712,11 +711,11 @@ public class Silence {
     }
   }
   
-  private static Optional<Message> getInvalidText(String address, String type) {
+  private static Message getInvalidText(String address, String type) {
     if (type.equals("TSM")) {
-      return Optional.of(new Message.Text(address, false, ""));
+      return new Message.Text(address, false, "");
     }
-    return Optional.of(new Message.SessionEnd(address, false));
+    return new Message.SessionEnd(address, false);
   }
   
   static {

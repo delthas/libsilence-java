@@ -74,23 +74,22 @@ String response = receive();
 
 
 // Parse the incoming message
-Optional<Message> message = silence.decrypt(address, response);
-// The Optional will be empty if the message wasn't a Silence protocol message
+Message message = silence.decrypt(address, response);
+// The Message will be null if the message wasn't a Silence protocol message
 // or if it was invalid
-if(!message.isPresent()) {
+if(message == null) {
   // Handle this exceptional case
   return;
 }
 
-Message message_ = message.get();
 // The Message can be a Message.KeyInit, a Message.KeyResponse, a Message.Text,
 // or a Message.SessionEnd. Here, it should be a KeyResponse message
-if(!message_.isKeyResponse()) {
+if(!message.isKeyResponse()) {
   // Handle this exceptional case
   return;
 }
 
-Message.KeyResponse keyResponse = message_.asKeyResponse();
+Message.KeyResponse keyResponse = message.asKeyResponse();
 // By default the key response is automatically accepted and stored,
 // so we don't have to anything about this message
 // For this example purpose, let's print its fingerprint
@@ -101,17 +100,17 @@ System.out.println(hexFingerprint);
 // Now that the session is established, let's send a secure text message
 String text = "Very secure text message!!";
 
-Optional<String> encryptedText = silence.encryptText(address, text); 
-// The Optional will be empty if the message couldn't be encrypted because no secure
+String encryptedText = silence.encryptText(address, text); 
+// The String will be null if the message couldn't be encrypted because no secure
 // session is currently established. In our example case, this wouldn't happen
-if(!encryptedText.isPresent()) {
+if(encryptedText == null) {
   // Handle this exceptional case
   return;
 }
 
 // Send the message over a message transfer wire to your contact
 // (in the case of the Silence app, this would simply send this exact String as a SMS)
-send(encryptedText.get());
+send(encryptedText);
 
 
 // Let's create a hypothetical loop that would print all received encrypted messages
@@ -120,16 +119,15 @@ outer: while(true) {
   String encrypted = receive();
   message = silence.decrypt(address, encrypted);
   // Ignore invalid messages
-  if(!message.isPresent()) {
+  if(message == null) {
     continue;
   }
   
-  message_ = message.get();
   // You can use a switch rather than if/else conditions on .isXXX()
-  switch(message_.getType()) {
+  switch(message.getType()) {
     case TEXT:
       // The encrypted message is a text message
-      Message.Text receivedText = message_.asText();
+      Message.Text receivedText = message.asText();
       // getText() returns its decrypted text
       System.out.println(receivedText.getText());
       break;
@@ -173,16 +171,16 @@ try(InputStream in = Files.newInputStream(Paths.get("silence.dat"))) {
 // Let's send a secure multimedia message to a peer (without considering MMS compatibility for now).
 byte[] dataSend = /* ... */;
 
-Optional<MultimediaMessage> encryptedMessage = silence.encryptMultimedia(address, dataSend);
-// The Optional will be empty if the message couldn't be encrypted because no secure
+MultimediaMessage encryptedMessage = silence.encryptMultimedia(address, dataSend);
+// The MultimediaMessage will be null if the message couldn't be encrypted because no secure
 // session is currently established. In our example case, this wouldn't happen
-if(!encryptedMessage.isPresent()) {
+if(encryptedMessage == null) {
   // Handle this exceptional case
   return;
 }
 
 // Send the message over a multimedia message transfer wire to your contact
-sendMultimedia(encryptedMessage.get());
+sendMultimedia(encryptedMessage);
 
 
 // Receive the response message from your contact over a multimedia message transfer wire
@@ -190,16 +188,14 @@ sendMultimedia(encryptedMessage.get());
 MultimediaMessage response = receiveMultimedia();
 
 // Parse the incoming message
-Optional<byte[]> dataReceived_ = silence.decryptMultimedia(address, response);
-// The Optional will be empty if the message wasn't a Silence protocol message
+byte[] dataReceived = silence.decryptMultimedia(address, response);
+// The byte array will be null if the message wasn't a Silence protocol message
 // or if it was invalid
-if(!dataReceived_.isPresent()) {
+if(dataReceived == null) {
   // Handle this exceptional case
   return;
 }
-
 // dataReceived is equal to dataSend
-byte[] dataReceived = dataReceived_.get();
 
 
 // ...
@@ -213,8 +209,8 @@ byte[] dataReceived = dataReceived_.get();
 // On Android this means using e.g. PduBody, PduPart, and PduComposer.make()
 byte[] pduData = new PduComposer(context, pdu).make();
 
-Optional<MultimediaMessage> encryptedMessage = silence.encryptMultimedia(address, pduData);
-if(!encryptedMessage.isPresent()) {
+MultimediaMessage encryptedMessage = silence.encryptMultimedia(address, pduData);
+if(encryptedMessage == null) {
   return;
 }
 
@@ -234,13 +230,11 @@ sendMms(makePduFromMultimediaMessage(encryptedMessage));
 // Not trivial!
 MultimediaMessage received = makeMultimediaMessageFromPdu(pdu);
 
-Optional<byte[]> dataReceived_ = silence.decryptMultimedia(address, received);
-if(!dataReceived_.isPresent()) {
+byte[] dataReceived_ = silence.decryptMultimedia(address, received);
+if(dataReceived == null) {
   return;
 }
-
 // The decrypted data is equal to pduData and is the byte representation of an unencrypted MMS PDU.
-byte[] decryptedPdu = dataReceived_.get();
 
 // You must then decode the MMS PDU from this byte array to access the original MMS PDU body parts.
 // On Android this means using e.g. PduBody, PduPart, and PduParser.parse()
