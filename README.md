@@ -8,8 +8,9 @@ This API lets you:
 - Start and end secure sessions with other Silence users (using this library or the Silence Android app)
 - Send and receive secure Silence text messages
 - Review your and others' identity fingerprints
+- ***New:*** Send and receive secure Silence multimedia messages
 
-*This library does not currently support sending and receiving MMS, nor does it support Silence PreKeys.*
+*This library does not currently support Silence PreKeys.*
 
 ## Install
 
@@ -20,14 +21,14 @@ libsilence-java requires Java >= 8 to run. You can get this library using Maven 
     <dependency>       
            <groupId>fr.delthas</groupId>
            <artifactId>libsilence-java</artifactId>
-           <version>0.1.1</version>
+           <version>0.2.0</version>
     </dependency>
 </dependencies>
 ```
 
 ## Quick overview of the Silence protocol
 
-The Silence protocol is currently only used over SMS, where each Silence message corresponds to one (possibly concatenated) SMS, but could be used over any underlying message transfer medium.
+The Silence protocol is currently used over SMS, where each Silence message corresponds to one (possibly concatenated) SMS, and MMS. The encrypted messages created and decrypted by the library could be used over any underlying message transfer medium.
 
 Silence uses asymmetric encryption with one set of public and private keys for each contact (though an identity fingerprint is shared for all these keys). To start a secure session with a contact, you must send a `KeyInit` message, to which your contact must respond with a `KeyResponse` message. The secure session is then established and you and your contact can send encrypted `Text` messages to each other. When you want to end a secure session, you must send a `SessionEnd` message.
 
@@ -40,11 +41,13 @@ Silence uses asymmetric encryption with one set of public and private keys for e
 | **TSM**     | `encryptText()` `Message.Text`       | Encrypted text message sent when a secure session is established     |
 | **TSE**     | `encryptSessionEnd()` `Message.SessionEnd`       | Message sent for ending a secure session (you must not respond to this message)      |
 
+In addition to these text messages (sent as SMS), Silence supports sending and receiving encrypted multimedia messages (sent as MMS). These messages do not carry any session key init/response/end meaning and can only be used after a session is established.
+
 ## Quick example
 
 All calls are made through a `Silence` object, which should be saved and loaded every time it is used, since it stores state about the secure sessions (like public and private keys).
 
-The `Message` classes represent incoming encrypted messages.
+The `Message` classes represent incoming encrypted text messages.
 
 `libsilence-java` needs to store state for each session, so you must provide a String `address` for all `encrypt*` and `decrypt` calls, so that Silence knows which session the message corresponds to. In the case of the Silence Android app, the addresses are always phone numbers, but you could use whatever identifier you want. It will only be used as a (case-sensitive) hashmap key. 
 
@@ -167,6 +170,81 @@ try(InputStream in = Files.newInputStream(Paths.get("silence.dat"))) {
   return;
 }
 
+// Let's send a secure multimedia message to a peer (without considering MMS compatibility for now).
+byte[] dataSend = /* ... */;
+
+Optional<MultimediaMessage> encryptedMessage = silence.encryptMultimedia(address, dataSend);
+// The Optional will be empty if the message couldn't be encrypted because no secure
+// session is currently established. In our example case, this wouldn't happen
+if(!encryptedMessage.isPresent()) {
+  // Handle this exceptional case
+  return;
+}
+
+// Send the message over a multimedia message transfer wire to your contact
+sendMultimedia(encryptedMessage.get());
+
+
+// Receive the response message from your contact over a multimedia message transfer wire
+// A MultimediaMessage is simply a text subject and a text (encrypted, encoded) body
+MultimediaMessage response = receiveMultimedia();
+
+// Parse the incoming message
+Optional<byte[]> dataReceived_ = silence.decryptMultimedia(address, response);
+// The Optional will be empty if the message wasn't a Silence protocol message
+// or if it was invalid
+if(!dataReceived_.isPresent()) {
+  // Handle this exceptional case
+  return;
+}
+
+// dataReceived is equal to dataSend
+byte[] dataReceived = dataReceived_.get();
+
+
+// ...
+
+// Now let's consider MMS. Using MMS is harder because the encrypted subject and data from
+// the MultimediaMessage correspond to specific parts of the MMS PDU that wraps it.
+// libsilence-java deliberately does not depend on any specific MMS library because
+// there is no standard MMS library on Android.
+
+// To send an encrypted MMS, you must first create an unencrypted MMS PDU and serialize it to a byte array.
+// On Android this means using e.g. PduBody, PduPart, and PduComposer.make()
+byte[] pduData = new PduComposer(context, pdu).make();
+
+Optional<MultimediaMessage> encryptedMessage = silence.encryptMultimedia(address, pduData);
+if(!encryptedMessage.isPresent()) {
+  return;
+}
+
+// You must then construct a new MMS PDU with specific fields taken from the returned MultimediaMessage:
+// - encryptedMessage.getSubject() must be set as the MMS PDU subject header
+// - encryptedMessage.getData() must be set as the MMS PDU body part body of
+//   a part whose content type must be "text/plain"
+
+// Not trivial!
+sendMms(makePduFromMultimediaMessage(encryptedMessage));
+
+// Now let's receive an MMS. First, you'll receive an encrypted MMS PDU.
+// You must extract the subject and body values from the MMS PDU as follows:
+// - subject is the MMS PDU subject header
+// - body is the data of the first MMS PDU body part whose content type is "text/plain"
+
+// Not trivial!
+MultimediaMessage received = makeMultimediaMessageFromPdu(pdu);
+
+Optional<byte[]> dataReceived_ = silence.decryptMultimedia(address, received);
+if(!dataReceived_.isPresent()) {
+  return;
+}
+
+// The decrypted data is equal to pduData and is the byte representation of an unencrypted MMS PDU.
+byte[] decryptedPdu = dataReceived_.get();
+
+// You must then decode the MMS PDU from this byte array to access the original MMS PDU body parts.
+// On Android this means using e.g. PduBody, PduPart, and PduParser.parse()
+MultimediaMessagePdu message = PduParser(data, true).parse()
 ```
 
 ## Documentation

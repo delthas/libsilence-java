@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>fr.delthas</groupId>
   <artifactId>libsilence-java</artifactId>
-  <version>0.1.2-SNAPSHOT</version>
+  <version>0.2.0</version>
 
   <name>libsilence-java</name>
   <url>https://github.com/delthas/libsilence-java</url>
@@ -99,20 +99,6 @@
             <id>attach-javadocs</id>
             <goals>
               <goal>jar</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-gpg-plugin</artifactId>
-        <version>1.6</version>
-        <executions>
-          <execution>
-            <id>sign-artifacts</id>
-            <phase>verify</phase>
-            <goals>
-              <goal>sign</goal>
             </goals>
           </execution>
         </executions>

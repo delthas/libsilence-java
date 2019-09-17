@@ -1,23 +1,20 @@
 package fr.delthas.libsilence;
 
 import com.google.protobuf.ByteString;
-import com.google.protobuf.InvalidProtocolBufferException;
 import org.whispersystems.libsignal.*;
 import org.whispersystems.libsignal.ecc.Curve;
 import org.whispersystems.libsignal.ecc.ECKeyPair;
 import org.whispersystems.libsignal.ecc.ECPublicKey;
 import org.whispersystems.libsignal.protocol.CiphertextMessage;
+import org.whispersystems.libsignal.protocol.SignalMessage;
 import org.whispersystems.libsignal.protocol.SignalProtos;
 import org.whispersystems.libsignal.ratchet.*;
 import org.whispersystems.libsignal.state.SessionRecord;
 import org.whispersystems.libsignal.state.SessionState;
 import org.whispersystems.libsignal.util.ByteUtil;
 import org.whispersystems.libsignal.util.KeyHelper;
-import org.whispersystems.libsignal.util.Pair;
 
 import javax.crypto.Cipher;
-import javax.crypto.Mac;
-import javax.crypto.spec.IvParameterSpec;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -27,6 +24,7 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.*;
 
 /**
@@ -54,7 +52,7 @@ public class Silence {
   }
   
   private SerializableSignalProtocolStore sessionStore;
-  private Object lock = new Object();
+  private final Object lock = new Object();
   
   /**
    * Create a Silence instance from saved state. The input stream <b>MUST</b> read from data previously saved with {@link #saveTo(OutputStream)}.
@@ -177,6 +175,58 @@ public class Silence {
   }
   
   /**
+   * Encrypts some data into a Silence multimedia message (MMS).
+   * <p>
+   * This method can be used to encrypt multimedia messages, either to send them as MMS to Silence users, or to send them as is to users of this library (to be later decrypted with {@link #decryptMultimedia(String, MultimediaMessage)}.
+   * <p>
+   * Only encrypted messages can be sent as multimedia messages (not key init, key response or key end messages), but for this use case it is more efficient with regard to encrypted message length and processing speed than {@link #encryptText(String, String)} as it does not do any SMS-specific padding.
+   * <p>
+   * The data you pass can be any arbitrary binary data, but if the message is to be sent as an MMS, the data must be the exact encoded MMS PDU data (as would be returned by e.g. {@code PduComposer(context, message).make() from the Android internal MMS library}).
+   * <p>
+   * The returned {@link MultimediaMessage}, if present, will contain both a plaintext subject and some encrypted data. If the message is to be sent as an MMS, the MMS PDU that must be sent should have the exact subject {@link MultimediaMessage#getSubject()}, and have a single PDU body part with content type {@code text/plain} and value {@link MultimediaMessage#getData()}.
+   * <p>
+   * The returned Optional will be empty if the message couldn't be encrypted, which happens if no secure session is currently established for this address.
+   * @param address The unique identifier for the contact for which the message must be encrypted.
+   * @param data The data to encrypt (in the case of an MMS, the encoded MMS PDU data).
+   * @return An Optional containing the encrypted multimedia message to be sent over the message transfer wire or by MMS, or empty if the data couldn't be encrypted.
+   * @see #decryptMultimedia(String, MultimediaMessage)
+   */
+  public Optional<MultimediaMessage> encryptMultimedia(String address, byte[] data) {
+    Objects.requireNonNull(address);
+    Objects.requireNonNull(data);
+    synchronized (lock) {
+      SessionCipher sessionCipher = new SessionCipher(sessionStore, new SignalProtocolAddress(address, 1));
+      try {
+        CiphertextMessage ciphertextMessage = sessionCipher.encrypt(data);
+        String encrypted = encoder.encodeToString(ciphertextMessage.serialize());
+        String subject;
+        try {
+          byte[] postfix = new byte[6];
+          SecureRandom.getInstance("SHA1PRNG").nextBytes(postfix);
+    
+          byte[] postfixEncoded = encoder.encode(postfix);
+  
+          MessageDigest md = MessageDigest.getInstance("SHA1");
+          byte[] runningDigest = postfixEncoded;
+  
+          for (int i=0;i<1000;i++) {
+            runningDigest = md.digest(runningDigest);
+          }
+  
+          String prefix = encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
+          
+          subject = prefix + new String(postfixEncoded);
+        } catch (NoSuchAlgorithmException e) {
+          throw new AssertionError(e);
+        }
+        return Optional.of(new MultimediaMessage(subject, encrypted));
+      } catch (Exception e) {
+        return Optional.empty();
+      }
+    }
+  }
+  
+  /**
    * Decrypts a Silence message.
    * <p>
    * <b>Since you cannot know whether received messages are Silence messages, you can use this endpoint for all incoming messages (this method will return an empty Optional if the message is not a Silence message).</b>
@@ -215,6 +265,85 @@ public class Silence {
       }
       return message;
     }
+  }
+  
+  /**
+   * Decrypts a Silence multimedia message (MMS).
+   * <p>
+   * This method can be used to decrypt multimedia messages from peers using Silence over MMS, but it can also be used to decrypt messages created from {@link #encryptMultimedia(String, byte[])} of this library.
+   * <p>
+   * Only encrypted messages can be sent as multimedia messages (not key init, key response or key end messages), but for this use case it is more efficient with regard to encrypted message length and processing speed as it does not do any SMS-specific padding.
+   * <p>
+   * <b>Since you cannot know whether received multimedia messages are Silence messages, you can use this endpoint for all incoming multimedia messages (this method will return an empty Optional if the message is not a Silence message).</b>
+   * <p>
+   * The data you pass can be any arbitrary binary data, but if the incoming message is an MMS, it must be the exact String of the first MMS PDU part whose type is {@code text/plain}.
+   * <p>
+   * The returned byte array, if present, will be a raw byte array representing the decrypted data. If the incoming message was an MMS, the decrypted data is the raw decrypted MMS PDU, that could be decoded by using e.g. {@code PduParser(data)} from the Android internal MMS library.
+   * <p>
+   * <b>Some automatic session processing can happen when decrypting a message, and a message should generally be decrypted only once.</b>
+   * <p>
+   * The returned Optional will be empty if the message was not a valid Silence message or if it was invalid with regard to the secure session.
+   * @param address The unique identifier for the contact from which the message was received.
+   * @param message The encrypted multimedia message.
+   * @return An Optional containing the decrypted data (in the case of an MMS, the raw decrypted MMS PDU data), or empty if the message was not a valid Silence message or was invalid.
+   * @see #encryptMultimedia(String, byte[])
+   * @see MultimediaMessage
+   */
+  public Optional<byte[]> decryptMultimedia(String address, MultimediaMessage message) {
+    Objects.requireNonNull(address);
+    Objects.requireNonNull(message);
+    String subject = message.getSubject();
+    String data = message.getData();
+    if (subject.length() < 9)
+      return Optional.empty();
+  
+    String prefix = subject.substring(0, 8);
+    String postfix = subject.substring(8);
+  
+    MessageDigest md;
+    try {
+      md = MessageDigest.getInstance("SHA1");
+    } catch (NoSuchAlgorithmException e) {
+      throw new InternalError(e);
+    }
+    byte[] runningDigest = postfix.getBytes();
+  
+    for (int i = 0; i < 1000; i++) {
+      runningDigest = md.digest(runningDigest);
+    }
+  
+    String calculatedPrefix = encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
+    
+    if(!prefix.equals(calculatedPrefix)) {
+      return Optional.empty();
+    }
+  
+    byte[] plainText;
+    synchronized (lock) {
+      byte[] decoded = decoder.decode(data.getBytes());
+      SessionCipher sessionCipher = new SessionCipher(sessionStore, new SignalProtocolAddress(address, 1));
+      try {
+        try {
+          plainText = sessionCipher.decrypt(new SignalMessage(decoded));
+        } catch (InvalidMessageException e) {
+          // workaround for Sprint appending a character at the end of MMS PDU body
+          // text parts: try to decrypt without the last character if the decryption fails
+          if (data.length() > 2) {
+            byte[] original = data.getBytes();
+            byte[] trimmed = new byte[original.length];
+            System.arraycopy(original, 0, trimmed, 0, trimmed.length);
+            decoded = decoder.decode(trimmed);
+            plainText = sessionCipher.decrypt(new SignalMessage(decoded));
+          } else {
+            throw e;
+          }
+        }
+      } catch (Exception e) {
+        return Optional.empty();
+      }
+    }
+    
+    return Optional.of(plainText);
   }
   
   /**
@@ -364,7 +493,7 @@ public class Silence {
       }
       
       SessionCipher cipher = new SessionCipher(sessionStore, address);
-      CiphertextMessage ciphertextMessage = null;
+      CiphertextMessage ciphertextMessage;
       try {
         ciphertextMessage = cipher.encrypt(paddedBody);
       } catch (UntrustedIdentityException e) {
@@ -383,7 +512,7 @@ public class Silence {
     message = encoder.encodeToString(messageWithMultipartHeader);
     
     String typePrefix = "?" + type;
-    MessageDigest md = null;
+    MessageDigest md;
     try {
       md = MessageDigest.getInstance("SHA1");
     } catch (NoSuchAlgorithmException e) {
@@ -407,7 +536,7 @@ public class Silence {
       String prefix = message.substring(0, 4);
       String messageBody = message.substring(4);
       
-      MessageDigest md = null;
+      MessageDigest md;
       try {
         md = MessageDigest.getInstance("SHA1");
       } catch (NoSuchAlgorithmException e) {
@@ -485,7 +614,7 @@ public class Silence {
           }
           
           if (initial) {
-            flags = 0X02;
+            flags = 0x02;
             SessionRecord sessionRecord = sessionStore.loadSession(address);
             
             if (!Curve.verifySignature(identityKey.getPublicKey(),
@@ -519,7 +648,6 @@ public class Silence {
             
             return Optional.of(new Message.KeyInit(addressString, true, identityKey.serialize(), flags, sequence, sessionRecord, parameters));
           } else {
-            
             SessionRecord sessionRecord = sessionStore.loadSession(address);
             SessionState sessionState = sessionRecord.getSessionState();
             boolean hasPendingKeyExchange = sessionState.hasPendingKeyExchange();
@@ -553,238 +681,15 @@ public class Silence {
         }
         case "TSM":
         case "TSE": {
-          byte[][] messageParts = ByteUtil.split(decoded, 1, decoded.length - 1 - 8, 8);
-          byte version = messageParts[0][0];
-          byte[] messageBytes = messageParts[1];
-          
-          if (ByteUtil.highBitsToInt(version) <= 1) {
-            return getInvalidText(addressString, type);
-          }
-          
-          if (ByteUtil.highBitsToInt(version) > 3) {
-            return getInvalidText(addressString, type);
-          }
-          
-          SignalProtos.SignalMessage whisperMessage = null;
+          SignalMessage signalMessage = new SignalMessage(decoded);
+          SessionCipher sessionCipher = new SessionCipher(sessionStore, address);
+          byte[] plaintext;
           try {
-            whisperMessage = SignalProtos.SignalMessage.parseFrom(messageBytes);
-          } catch (InvalidProtocolBufferException e) {
+            plaintext = sessionCipher.decrypt(signalMessage);
+          } catch (InvalidMessageException | DuplicateMessageException | LegacyMessageException | NoSessionException | UntrustedIdentityException e) {
             return getInvalidText(addressString, type);
           }
-          
-          if (!whisperMessage.hasCiphertext() ||
-                  !whisperMessage.hasCounter() ||
-                  !whisperMessage.hasRatchetKey()) {
-            return getInvalidText(addressString, type);
-          }
-          
-          ECPublicKey senderRatchetKey = null;
-          try {
-            senderRatchetKey = Curve.decodePoint(whisperMessage.getRatchetKey().toByteArray(), 0);
-          } catch (InvalidKeyException e) {
-            return getInvalidText(addressString, type);
-          }
-          int messageVersion = ByteUtil.highBitsToInt(version);
-          int counter = whisperMessage.getCounter();
-          byte[] ciphertext = whisperMessage.getCiphertext().toByteArray();
-          byte[] plaintext = null;
-          
-          if (!sessionStore.containsSession(address)) {
-            return getInvalidText(addressString, type);
-          }
-          
-          SessionRecord sessionRecord = sessionStore.loadSession(address);
-          
-          
-          Iterator<SessionState> previousStates = sessionRecord.getPreviousSessionStates().iterator();
-          
-          {
-            SessionState sessionState = new SessionState(sessionRecord.getSessionState());
-            
-            if (!sessionState.hasSenderChain()) {
-              return getInvalidText(addressString, type);
-            }
-            
-            if (messageVersion != sessionState.getSessionVersion()) {
-              return getInvalidText(addressString, type);
-            }
-            
-            ChainKey chainKey;
-            if (sessionState.hasReceiverChain(senderRatchetKey)) {
-              chainKey = sessionState.getReceiverChainKey(senderRatchetKey);
-            } else {
-              RootKey rootKey = sessionState.getRootKey();
-              ECKeyPair ourEphemeral = sessionState.getSenderRatchetKeyPair();
-              Pair<RootKey, ChainKey> receiverChain = rootKey.createChain(senderRatchetKey, ourEphemeral);
-              ECKeyPair ourNewEphemeral = Curve.generateKeyPair();
-              Pair<RootKey, ChainKey> senderChain = receiverChain.first().createChain(senderRatchetKey, ourNewEphemeral);
-              
-              sessionState.setRootKey(senderChain.first());
-              sessionState.addReceiverChain(senderRatchetKey, receiverChain.second());
-              sessionState.setPreviousCounter(Math.max(sessionState.getSenderChainKey().getIndex() - 1, 0));
-              sessionState.setSenderChain(ourNewEphemeral, senderChain.second());
-              
-              chainKey = receiverChain.second();
-            }
-            
-            MessageKeys messageKeys;
-            if (chainKey.getIndex() > counter) {
-              if (sessionState.hasMessageKeys(senderRatchetKey, counter)) {
-                messageKeys = sessionState.removeMessageKeys(senderRatchetKey, counter);
-              } else {
-                return getInvalidText(addressString, type);
-              }
-            } else {
-              if (counter - chainKey.getIndex() > 2000) {
-                return getInvalidText(addressString, type);
-              }
-              while (chainKey.getIndex() < counter) {
-                messageKeys = chainKey.getMessageKeys();
-                sessionState.setMessageKeys(senderRatchetKey, messageKeys);
-                chainKey = chainKey.getNextChainKey();
-              }
-              sessionState.setReceiverChainKey(senderRatchetKey, chainKey.getNextChainKey());
-              messageKeys = chainKey.getMessageKeys();
-            }
-            
-            byte[][] parts = ByteUtil.split(decoded, decoded.length - 8, 8);
-            
-            Mac macInstance = null;
-            try {
-              macInstance = Mac.getInstance("HmacSHA256");
-            } catch (NoSuchAlgorithmException e) {
-              throw new AssertionError(e);
-            }
-            macInstance.init(messageKeys.getMacKey());
-            
-            if (messageVersion >= 3) {
-              macInstance.update(sessionState.getRemoteIdentityKey().getPublicKey().serialize());
-              macInstance.update(sessionState.getLocalIdentityKey().getPublicKey().serialize());
-            }
-            
-            byte[] fullMac = macInstance.doFinal(parts[0]);
-            byte[] ourMac = ByteUtil.trim(fullMac, 8);
-            
-            byte[] theirMac = parts[1];
-            
-            if (!MessageDigest.isEqual(ourMac, theirMac)) {
-              return getInvalidText(addressString, type);
-            }
-            
-            Cipher cipher;
-            
-            if (version >= 3) {
-              cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-              cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), messageKeys.getIv());
-            } else {
-              cipher = Cipher.getInstance("AES/CTR/NoPadding");
-              byte[] ivBytes = new byte[16];
-              ByteUtil.intToByteArray(ivBytes, 0, counter);
-              IvParameterSpec iv = new IvParameterSpec(ivBytes);
-              cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), iv);
-            }
-            plaintext = cipher.doFinal(ciphertext);
-            
-            sessionState.clearUnacknowledgedPreKeyMessage();
-            sessionRecord.setState(sessionState);
-          }
-          
-          while (plaintext == null && previousStates.hasNext()) {
-            {
-              SessionState promotedState = new SessionState(previousStates.next());
-              
-              if (!promotedState.hasSenderChain()) {
-                return getInvalidText(addressString, type);
-              }
-              
-              if (messageVersion != promotedState.getSessionVersion()) {
-                return getInvalidText(addressString, type);
-              }
-              
-              ChainKey chainKey;
-              if (promotedState.hasReceiverChain(senderRatchetKey)) {
-                chainKey = promotedState.getReceiverChainKey(senderRatchetKey);
-              } else {
-                RootKey rootKey = promotedState.getRootKey();
-                ECKeyPair ourEphemeral = promotedState.getSenderRatchetKeyPair();
-                Pair<RootKey, ChainKey> receiverChain = rootKey.createChain(senderRatchetKey, ourEphemeral);
-                ECKeyPair ourNewEphemeral = Curve.generateKeyPair();
-                Pair<RootKey, ChainKey> senderChain = receiverChain.first().createChain(senderRatchetKey, ourNewEphemeral);
-                
-                promotedState.setRootKey(senderChain.first());
-                promotedState.addReceiverChain(senderRatchetKey, receiverChain.second());
-                promotedState.setPreviousCounter(Math.max(promotedState.getSenderChainKey().getIndex() - 1, 0));
-                promotedState.setSenderChain(ourNewEphemeral, senderChain.second());
-                
-                chainKey = receiverChain.second();
-              }
-              
-              MessageKeys messageKeys;
-              if (chainKey.getIndex() > counter) {
-                if (promotedState.hasMessageKeys(senderRatchetKey, counter)) {
-                  messageKeys = promotedState.removeMessageKeys(senderRatchetKey, counter);
-                } else {
-                  return getInvalidText(addressString, type);
-                }
-              } else {
-                if (counter - chainKey.getIndex() > 2000) {
-                  return getInvalidText(addressString, type);
-                }
-                while (chainKey.getIndex() < counter) {
-                  messageKeys = chainKey.getMessageKeys();
-                  promotedState.setMessageKeys(senderRatchetKey, messageKeys);
-                  chainKey = chainKey.getNextChainKey();
-                }
-                promotedState.setReceiverChainKey(senderRatchetKey, chainKey.getNextChainKey());
-                messageKeys = chainKey.getMessageKeys();
-              }
-              
-              byte[][] parts = ByteUtil.split(decoded, decoded.length - 8, 8);
-              
-              Mac macInstance = Mac.getInstance("HmacSHA256");
-              macInstance.init(messageKeys.getMacKey());
-              
-              if (messageVersion >= 3) {
-                macInstance.update(promotedState.getRemoteIdentityKey().getPublicKey().serialize());
-                macInstance.update(promotedState.getLocalIdentityKey().getPublicKey().serialize());
-              }
-              
-              byte[] fullMac = macInstance.doFinal(parts[0]);
-              byte[] ourMac = ByteUtil.trim(fullMac, 8);
-              
-              byte[] theirMac = parts[1];
-              
-              if (!MessageDigest.isEqual(ourMac, theirMac)) {
-                return getInvalidText(addressString, type);
-              }
-              
-              Cipher cipher;
-              
-              if (version >= 3) {
-                cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), messageKeys.getIv());
-              } else {
-                cipher = Cipher.getInstance("AES/CTR/NoPadding");
-                byte[] ivBytes = new byte[16];
-                ByteUtil.intToByteArray(ivBytes, 0, counter);
-                IvParameterSpec iv = new IvParameterSpec(ivBytes);
-                cipher.init(Cipher.DECRYPT_MODE, messageKeys.getCipherKey(), iv);
-              }
-              plaintext = cipher.doFinal(ciphertext);
-              
-              promotedState.clearUnacknowledgedPreKeyMessage();
-              
-              previousStates.remove();
-              sessionRecord.promoteState(promotedState);
-            }
-          }
-          
-          if (plaintext == null) {
-            return getInvalidText(addressString, type);
-          }
-          
-          sessionStore.storeSession(address, sessionRecord);
-          
+  
           int messageLength = plaintext.length;
           for (int i = 0; i < plaintext.length; i++) {
             if (plaintext[i] == (byte) 0x00) {

@@ -33,7 +33,7 @@ local.properties
 .target
 
 # intellij files
-
+.idea/
 *.iml
 
 
