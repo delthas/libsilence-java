@@ -8,24 +8,27 @@ import org.whispersystems.libsignal.ecc.ECPublicKey;
 import org.whispersystems.libsignal.protocol.CiphertextMessage;
 import org.whispersystems.libsignal.protocol.SignalMessage;
 import org.whispersystems.libsignal.protocol.SignalProtos;
-import org.whispersystems.libsignal.ratchet.*;
+import org.whispersystems.libsignal.ratchet.RatchetingSession;
+import org.whispersystems.libsignal.ratchet.SymmetricSignalProtocolParameters;
 import org.whispersystems.libsignal.state.SessionRecord;
 import org.whispersystems.libsignal.state.SessionState;
 import org.whispersystems.libsignal.util.ByteUtil;
+import org.whispersystems.libsignal.util.Hex;
 import org.whispersystems.libsignal.util.KeyHelper;
 
 import javax.crypto.Cipher;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.util.*;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * The entrypoint for all encrypt and decrypt operations. <b>For general, "getting started" library usage, see <a href="https://github.com/delthas/libsilence-java">the library README</a>.</b>
@@ -43,13 +46,6 @@ import java.util.*;
  */
 public class Silence {
   private static final String[] MESSAGE_TYPES = {"TSK", "TSM", "TSP", "TSE", "TSX"};
-  private static final Base64.Encoder encoder;
-  private static final Base64.Decoder decoder;
-  
-  static {
-    encoder = Base64.getEncoder().withoutPadding();
-    decoder = Base64.getDecoder();
-  }
   
   private SerializableSignalProtocolStore sessionStore;
   private final Object lock = new Object();
@@ -198,13 +194,13 @@ public class Silence {
       SessionCipher sessionCipher = new SessionCipher(sessionStore, new SignalProtocolAddress(address, 1));
       try {
         CiphertextMessage ciphertextMessage = sessionCipher.encrypt(data);
-        String encrypted = encoder.encodeToString(ciphertextMessage.serialize());
+        String encrypted = Base64.encodeToString(ciphertextMessage.serialize());
         String subject;
         try {
           byte[] postfix = new byte[6];
           SecureRandom.getInstance("SHA1PRNG").nextBytes(postfix);
     
-          byte[] postfixEncoded = encoder.encode(postfix);
+          byte[] postfixEncoded = Base64.encode(postfix);
   
           MessageDigest md = MessageDigest.getInstance("SHA1");
           byte[] runningDigest = postfixEncoded;
@@ -213,7 +209,7 @@ public class Silence {
             runningDigest = md.digest(runningDigest);
           }
   
-          String prefix = encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
+          String prefix = Base64.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
           
           subject = prefix + new String(postfixEncoded);
         } catch (NoSuchAlgorithmException e) {
@@ -311,7 +307,7 @@ public class Silence {
       runningDigest = md.digest(runningDigest);
     }
   
-    String calculatedPrefix = encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
+    String calculatedPrefix = Base64.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2], runningDigest[3], runningDigest[4], runningDigest[5]});
     
     if(!prefix.equals(calculatedPrefix)) {
       return null;
@@ -319,7 +315,7 @@ public class Silence {
   
     byte[] plainText;
     synchronized (lock) {
-      byte[] decoded = decoder.decode(data.getBytes());
+      byte[] decoded = Base64.decode(data.getBytes());
       SessionCipher sessionCipher = new SessionCipher(sessionStore, new SignalProtocolAddress(address, 1));
       try {
         try {
@@ -331,7 +327,7 @@ public class Silence {
             byte[] original = data.getBytes();
             byte[] trimmed = new byte[original.length];
             System.arraycopy(original, 0, trimmed, 0, trimmed.length);
-            decoded = decoder.decode(trimmed);
+            decoded = Base64.decode(trimmed);
             plainText = sessionCipher.decrypt(new SignalMessage(decoded));
           } else {
             throw e;
@@ -346,21 +342,54 @@ public class Silence {
   }
   
   /**
+   * Returns whether an address corresponds to a current secure session.
+   * @return true if there is currently a Silence secure session for this address.
+   * @see #getFingerprintString(String)
+   */
+  public boolean hasSession(String address) {
+    synchronized (lock) {
+      return sessionStore.containsSession(new SignalProtocolAddress(address, 1));
+    }
+  }
+  
+  /**
    * Returns the fingerprint of a contact with which a secure session is currently established.
    * <p>
-   * To view the fingerprint as a string of hex characters, like in the Silence Android app, simply convert the byte array to a hex representation, for example by using {@link org.whispersystems.libsignal.util.Hex#toString(byte[])}, bundled as a dependency of this library.
+   * To view the fingerprint as a string of hex characters, like in the Silence Android app, use {@link #getFingerprintString(String)}.
    * <p>
    * The returned byte array will be null if no secure session is currently established with the specified contact.
    * @param address The unique identifier for the contact to get the fingerprint of.
    * @return A byte array containing the fingerprint of the contact, or null if no secure session with the contact is currently established.
+   * @see #getFingerprintString(String)
    */
   public final byte[] getFingerprint(String address) {
     Objects.requireNonNull(address);
     synchronized (lock) {
-      Objects.requireNonNull(address);
       SignalProtocolAddress address_ = new SignalProtocolAddress(address, 1);
-      return sessionStore.loadSession(address_).getSessionState().serialize();
+      byte[] fingerprint = sessionStore.loadSession(address_).getSessionState().serialize();
+      if(fingerprint.length == 0) {
+        fingerprint = null;
+      }
+      return fingerprint;
     }
+  }
+  
+  /**
+   * Returns the fingerprint of a contact with which a secure session is currently established as a String.
+   * <p>
+   * To view the raw byte fingerprint, use {@link #getFingerprint(String)}. This method is just a convenience wrapper that makes a hex String from the byte array fingerprint.
+   * <p>
+   * The returned String will be null if no secure session is currently established with the specified contact.
+   * @param address The unique identifier for the contact to get the fingerprint of.
+   * @return A String containing the fingerprint of the contact, or null if no secure session with the contact is currently established.
+   * @see #getFingerprint(String)
+   */
+  public final String getFingerprintString(String address) {
+    byte[] fingerprint = getFingerprint(address);
+    if(fingerprint == null) {
+      return null;
+    }
+    return Hex.toString(fingerprint);
   }
   
   /**
@@ -407,7 +436,7 @@ public class Silence {
       
       keyBuilder.setBaseKeySignature(ByteString.copyFrom(baseKeySignature));
       
-      return encrypt(address, encoder.encodeToString(ByteUtil.combine(versionBytes, keyBuilder.build().toByteArray())), "TSK");
+      return encrypt(address, Base64.encodeToString(ByteUtil.combine(versionBytes, keyBuilder.build().toByteArray())), "TSK");
     } catch (InvalidKeyException e) {
       throw new AssertionError(e);
     }
@@ -447,7 +476,7 @@ public class Silence {
       keyBuilder.setBaseKeySignature(ByteString.copyFrom(baseKeySignature));
     }
     
-    String encodedMessage = encoder.encodeToString(ByteUtil.combine(versionBytes, keyBuilder.build().toByteArray()));
+    String encodedMessage = Base64.encodeToString(ByteUtil.combine(versionBytes, keyBuilder.build().toByteArray()));
     
     return encrypt(keyInit.getAddress(), encodedMessage, "TSK");
   }
@@ -471,7 +500,13 @@ public class Silence {
     SignalProtocolAddress address = new SignalProtocolAddress(addressString, 1);
     byte[] decoded;
     if (type.equals("TSM") || type.equals("TSE")) {
-      byte[] messageBody = message.getBytes(StandardCharsets.UTF_8);
+      byte[] messageBody;
+      try {
+        messageBody = message.getBytes("UTF-8");
+      } catch (UnsupportedEncodingException e) {
+        // will never happen
+        throw new InternalError(e);
+      }
       int paddedBodySize;
       if (messageBody.length <= 63) {
         paddedBodySize = 63;
@@ -501,14 +536,14 @@ public class Silence {
       }
       decoded = ciphertextMessage.serialize();
     } else {
-      decoded = decoder.decode(message);
+      decoded = Base64.decode(message);
     }
     
     byte[] messageWithMultipartHeader = new byte[decoded.length + 1];
     System.arraycopy(decoded, 0, messageWithMultipartHeader, 1, decoded.length);
     messageWithMultipartHeader[0] = decoded[0];
     messageWithMultipartHeader[1] = (byte) 1;
-    message = encoder.encodeToString(messageWithMultipartHeader);
+    message = Base64.encodeToString(messageWithMultipartHeader);
     
     String typePrefix = "?" + type;
     MessageDigest md;
@@ -523,7 +558,7 @@ public class Silence {
       runningDigest = md.digest(runningDigest);
     }
     
-    return encoder.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2]}) + message;
+    return Base64.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2]}) + message;
   }
   
   protected final String _getHeader(String addressString, String message) {
@@ -541,13 +576,19 @@ public class Silence {
       } catch (NoSuchAlgorithmException e) {
         throw new AssertionError(e);
       }
-      byte[] runningDigest = ("?" + prefixType + messageBody).getBytes(StandardCharsets.UTF_8);
-      
+      byte[] runningDigest;
+      try {
+        runningDigest = ("?" + prefixType + messageBody).getBytes("UTF-8");
+      } catch (UnsupportedEncodingException e) {
+        // will never happen
+        throw new InternalError(e);
+      }
+  
       for (int i = 0; i < 1000; i++) {
         runningDigest = md.digest(runningDigest);
       }
       
-      String calculatedPrefix = Base64.getEncoder().encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2]});
+      String calculatedPrefix = Base64.encodeToString(new byte[]{runningDigest[0], runningDigest[1], runningDigest[2]});
       
       if (prefix.equals(calculatedPrefix)) {
         type = prefixType;
@@ -564,7 +605,7 @@ public class Silence {
       if (message.length() < 4) {
         return null;
       }
-      byte[] decoded = decoder.decode(message.substring(4));
+      byte[] decoded = Base64.decode(message.substring(4));
       
       byte[] stripped = new byte[decoded.length - 1];
       System.arraycopy(decoded, 1, stripped, 0, decoded.length - 1);
@@ -696,8 +737,13 @@ public class Silence {
               break;
             }
           }
-          
-          message = new String(plaintext, 0, messageLength, StandardCharsets.UTF_8);
+  
+          try {
+            message = new String(plaintext, 0, messageLength, "UTF-8");
+          } catch (UnsupportedEncodingException e) {
+            // will never happen
+            throw new InternalError(e);
+          }
           if (type.equals("TSE")) {
             return new Message.SessionEnd(addressString, "TERMINATE".equals(message));
           }
