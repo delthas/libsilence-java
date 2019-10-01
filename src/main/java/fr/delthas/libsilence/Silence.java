@@ -247,16 +247,17 @@ public class Silence {
         return null;
       }
       Message message = _decrypt(address, header, text);
-      if (message != null && message.isValid()) {
-        switch (message.getType()) {
-          case KEY_RESPONSE:
-            _acceptKeyResponse(message.asKeyResponse());
-            break;
-          case SESSION_END:
-            _endSession(message.getAddress());
-            break;
-          default:
-        }
+      if(message == null || !message.isValid()) {
+        return null;
+      }
+      switch (message.getType()) {
+        case KEY_RESPONSE:
+          _acceptKeyResponse(message.asKeyResponse());
+          break;
+        case SESSION_END:
+          _endSession(message.getAddress());
+          break;
+        default:
       }
       return message;
     }
@@ -315,6 +316,7 @@ public class Silence {
   
     byte[] plainText;
     synchronized (lock) {
+      data = data.replace("\n", "").replace(" ", ""); // unused chararcters that are added by Silence/my carrier?
       byte[] decoded = Base64.decode(data.getBytes());
       SessionCipher sessionCipher = new SessionCipher(sessionStore, new SignalProtocolAddress(address, 1));
       try {
