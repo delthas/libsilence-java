@@ -32,7 +32,7 @@ final class Base64 {
     int remaining = input.length % 3;
     int length = full * 4;
     if (remaining != 0) {
-      length += remaining + 1;
+      length += 4;
     }
     byte[] output = new byte[length];
     for (int i = 0; i < full; i++) {
@@ -46,11 +46,14 @@ final class Base64 {
       int c = (input[full * 3] & 0xFF) << 4;
       output[full * 4] = ENCODE_TABLE[c >>> 6];
       output[full * 4 + 1] = ENCODE_TABLE[c & 0b111111];
+      output[full * 4 + 2] = '=';
+      output[full * 4 + 3] = '=';
     } else if (remaining == 2) {
       int c = (((input[full * 3] & 0xFF) << 8) | (input[full * 3 + 1] & 0xFF)) << 2;
       output[full * 4] = ENCODE_TABLE[c >>> 12];
       output[full * 4 + 1] = ENCODE_TABLE[(c >>> 6) & 0b111111];
       output[full * 4 + 2] = ENCODE_TABLE[c & 0b111111];
+      output[full * 4 + 3] = '=';
     }
     return output;
   }

@@ -12,18 +12,60 @@ This API lets you:
 
 *This library does not currently support Silence PreKeys.*
 
-## Install
+## Usage
 
-libsilence-java requires Java >= 8 to run. You can get this library using Maven by adding this to your ```pom.xml```:
+The latest version is: **`1.1.2`**
 
+### Maven
+
+Add to your Maven `pom.xml`:
 ```xml
- <dependencies>
-    <dependency>       
-           <groupId>fr.delthas</groupId>
-           <artifactId>libsilence-java</artifactId>
-           <version>0.2.0</version>
+<repositories>
+  <repository>
+    <id>s06r</id>
+    <url>https://maven.dille.cc</url>
+  </repository>
+</repositories>
+
+<dependencies>
+    <dependency>
+        <groupId>fr.delthas</groupId>
+        <artifactId>libsilence-java</artifactId>
+        <version>VERSION</version>
     </dependency>
 </dependencies>
+```
+
+### Gradle
+
+Add to your `build.gradle`:
+
+```
+repositories {
+    maven {
+        url 'https://maven.dille.cc'
+    }
+}
+
+dependencies {
+    implementation 'fr.delthas:libsilence-java:VERSION''
+}
+```
+
+### Gradle (Kotlin build script)
+
+Add to your `build.gradle.kts`:
+
+```
+repositories {
+    maven {
+        url = uri("https://maven.dille.cc")
+    }
+}
+
+dependencies {
+    implementation("fr.delthas:libsilence-java:VERSION")
+}
 ```
 
 ## Quick overview of the Silence protocol
